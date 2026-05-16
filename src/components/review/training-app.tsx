@@ -353,7 +353,8 @@ export function TrainingApp() {
           </div>
 
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-sm font-semibold text-ink">{exercise.title}</h1>
+            <p className="truncate text-sm font-semibold text-ink">make engineers great again.</p>
+            <h1 className="mt-0.5 truncate text-xs font-medium text-muted">{exercise.title}</h1>
             <div className="mt-1 flex items-center gap-2 text-xs text-muted">
               <span>{exercise.sourceRepo.label}</span>
               <span>Difficulty {exercise.difficulty}</span>
@@ -417,34 +418,6 @@ export function TrainingApp() {
                 </div>
                 <div className="p-4">
                   <MarkdownBlock value={exercise.learnerTask} />
-                </div>
-              </Panel>
-              <Panel className="overflow-hidden">
-                <div className="border-b border-line px-4 py-3">
-                  <h2 className="text-sm font-semibold">Review Orientation</h2>
-                </div>
-                <div className="space-y-3 p-4 text-sm leading-6 text-muted">
-                  <p className="text-pretty">
-                    Before hunting for bugs, build the map you would need in a real PR review.
-                  </p>
-                  <ul className="space-y-2">
-                    <li className="flex gap-2">
-                      <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
-                      <span>What user/product behavior changes?</span>
-                    </li>
-                    <li className="flex gap-2">
-                      <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
-                      <span>Which bounded contexts are touched?</span>
-                    </li>
-                    <li className="flex gap-2">
-                      <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
-                      <span>What are the entrypoints?</span>
-                    </li>
-                    <li className="flex gap-2">
-                      <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
-                      <span>What database tables or migrations are involved?</span>
-                    </li>
-                  </ul>
                 </div>
               </Panel>
               <Panel className="overflow-hidden">
