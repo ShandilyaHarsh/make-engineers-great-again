@@ -4,7 +4,11 @@ import type { ChatMessage, Exercise } from "@/lib/types";
 export const runtime = "nodejs";
 
 type ChatRequest = {
-  exercise: Pick<Exercise, "id" | "title" | "flaws" | "debrief" | "verdictRubric">;
+  submitted: boolean;
+  exercise: {
+    publicContext: Record<string, unknown>;
+    hiddenAnswerKey: Pick<Exercise, "flaws" | "debrief" | "verdictRubric"> | null;
+  };
   answers: Array<{
     flawId: string;
     answer: string;
@@ -19,12 +23,13 @@ export async function POST(request: Request) {
   if (!process.env.OPENAI_API_KEY) {
     return NextResponse.json({
       message:
-        "Chat is ready, but OPENAI_API_KEY is not configured. Add it on the server to discuss your submitted answer against the hidden answer key.",
+        "Chat is ready, but OPENAI_API_KEY is not configured. Add it on the server to ask questions about this PR.",
       disabled: true,
     });
   }
 
   const model = process.env.OPENAI_CHAT_MODEL ?? process.env.OPENAI_VERIFIER_MODEL ?? "gpt-5-nano";
+  const submitted = Boolean(payload.submitted);
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -33,14 +38,16 @@ export async function POST(request: Request) {
     },
     body: JSON.stringify({
       model,
-      instructions:
-        "You are a senior engineering coach helping a learner after they submitted a PR review exercise. You may use the hidden golden answers. Be direct, specific, and focused on improving review judgment.",
+      instructions: submitted
+        ? "You are a senior engineering coach helping a learner after they submitted a PR review exercise. You may use the hidden golden answers. Be direct, specific, and focused on improving review judgment."
+        : "You are a senior engineering coach helping a learner understand a PR before they submit their review. Explain product language, domain concepts, contracts, entrypoints, files, and code-review context from the public PR material. Do not reveal hidden flaws, golden answers, verdicts, or direct findings. If asked what is wrong with the PR, redirect toward neutral review questions and public areas to inspect without naming the hidden answer.",
       input: [
         {
           role: "user",
           content: JSON.stringify({
-            exercise: payload.exercise,
-            submittedAnswers: payload.answers,
+            exercise: payload.exercise.publicContext,
+            hiddenAnswerKey: submitted ? payload.exercise.hiddenAnswerKey : null,
+            submittedAnswers: submitted ? payload.answers : [],
             conversation: payload.messages.map((message) => ({
               role: message.role,
               content: message.content,

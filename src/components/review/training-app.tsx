@@ -278,13 +278,8 @@ export function TrainingApp() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          exercise: {
-            id: exercise.id,
-            title: exercise.title,
-            flaws: exercise.flaws,
-            debrief: exercise.debrief,
-            verdictRubric: exercise.verdictRubric,
-          },
+          submitted: currentProgress.submitted,
+          exercise: buildChatExercisePayload(exercise, currentProgress.submitted),
           answers: exercise.flaws.map((flaw) => ({
             flawId: flaw.id,
             answer: currentProgress.flaws[flaw.id]?.answer ?? "",
@@ -326,7 +321,20 @@ export function TrainingApp() {
         Skip to flaws
       </a>
       <header className="sticky top-0 z-40 bg-canvas/92 shadow-[0_1px_0_hsl(var(--line)),0_8px_24px_rgba(15,23,42,0.05)] backdrop-blur">
-        <div className="flex min-h-16 items-center gap-3 px-4">
+        <div className="relative flex min-h-14 items-center justify-center px-4">
+          <div className="absolute left-4 hidden items-center gap-2 text-xs text-muted sm:flex">
+            <GitPullRequest className="h-4 w-4 text-accent" />
+            <span className="font-mono tabular-nums">{exercise.id}</span>
+          </div>
+          <h1 className="max-w-[72vw] truncate text-center text-sm font-semibold tracking-[0.01em] text-ink sm:text-base">
+            Make Engineers Great Again
+          </h1>
+          <div className="absolute right-4 hidden text-xs text-muted tabular-nums sm:block">
+            {completedCount}/{index.count} complete
+          </div>
+        </div>
+
+        <div className="flex min-h-14 items-center gap-3 border-t border-line/70 px-4">
           <Button size="icon" variant="ghost" aria-label="Previous exercise" onClick={() => goToExercise(index.exercises[Math.max(0, currentIndex - 1)].id)}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
@@ -353,8 +361,7 @@ export function TrainingApp() {
           </div>
 
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-ink">make engineers great again.</p>
-            <h1 className="mt-0.5 truncate text-xs font-medium text-muted">{exercise.title}</h1>
+            <p className="truncate text-sm font-semibold text-ink">{exercise.title}</p>
             <div className="mt-1 flex items-center gap-2 text-xs text-muted">
               <span>{exercise.sourceRepo.label}</span>
               <span>Difficulty {exercise.difficulty}</span>
@@ -420,6 +427,25 @@ export function TrainingApp() {
                   <MarkdownBlock value={exercise.learnerTask} />
                 </div>
               </Panel>
+              <ChatPanel
+                title={currentProgress.submitted ? "PR Discussion" : "Ask About This PR"}
+                emptyText={
+                  currentProgress.submitted
+                    ? "Ask about your submitted review, missed reasoning, or better implementation shape."
+                    : "Ask about product language, domain concepts, contracts, or files in this PR."
+                }
+                placeholder={
+                  currentProgress.submitted
+                    ? "Ask a follow-up after submission..."
+                    : "Ask what a dataset run is..."
+                }
+                inputName={`${exercise.id}-description-chat-message`}
+                messages={currentProgress.chat}
+                draft={chatDraft}
+                sending={chatSending}
+                onDraftChange={setChatDraft}
+                onSend={sendChat}
+              />
               <Panel className="overflow-hidden">
                 <div className="border-b border-line px-4 py-3">
                   <h2 className="text-sm font-semibold">PR Shape</h2>
@@ -436,14 +462,14 @@ export function TrainingApp() {
         ) : null}
 
         {activeTab === "code" ? (
-          <div className="min-h-[calc(100vh-8.25rem)]">
-            <Panel className="grid min-h-[calc(100vh-8.25rem)] overflow-hidden xl:grid-cols-[220px_minmax(0,1fr)]">
+          <div className="min-h-[calc(100vh-11.5rem)]">
+            <Panel className="grid min-h-[calc(100vh-11.5rem)] overflow-hidden xl:grid-cols-[220px_minmax(0,1fr)]">
               <aside className="border-b border-line bg-panel/55 xl:border-b-0 xl:border-r">
                 <div className="flex items-center gap-2 border-b border-line px-3 py-3">
                   <FileCode2 className="h-4 w-4 text-muted" />
                   <h2 className="text-sm font-semibold">Files</h2>
                 </div>
-                <div className="max-h-72 overflow-auto p-2 scrollbar-thin xl:max-h-[calc(100vh-11.5rem)]">
+                <div className="max-h-72 overflow-auto p-2 scrollbar-thin xl:max-h-[calc(100vh-15rem)]">
                   {exercise.diff.files.map((file) => (
                     <button
                       key={file.newPath}
@@ -474,7 +500,7 @@ export function TrainingApp() {
                   </Button>
                 </div>
 
-                <div className="max-h-[calc(100vh-13rem)] overflow-auto bg-[#fbfcfd] font-mono text-xs leading-5 scrollbar-thin">
+                <div className="max-h-[calc(100vh-16.5rem)] overflow-auto bg-[#fbfcfd] font-mono text-xs leading-5 scrollbar-thin">
                   {loadingExercise || !selectedDiffFile ? (
                     <div className="flex h-64 items-center justify-center gap-2 text-muted">
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -500,7 +526,7 @@ export function TrainingApp() {
         ) : null}
 
         {activeTab === "flaws" ? (
-          <section id="flaws-tab" className="mx-auto max-w-5xl scroll-mt-28">
+          <section id="flaws-tab" className="mx-auto max-w-5xl scroll-mt-36">
             <Panel className="overflow-hidden">
             <div className="flex items-center justify-between border-b border-line px-4 py-3">
               <div>
@@ -641,45 +667,17 @@ export function TrainingApp() {
                     </div>
                   </Panel>
 
-                  <Panel className="overflow-hidden bg-panel/70">
-                    <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-                      <MessageSquare className="h-4 w-4 text-accent" />
-                      <h3 className="text-sm font-semibold">Discussion</h3>
-                    </div>
-                    <div className="max-h-72 space-y-3 overflow-auto p-4 scrollbar-thin">
-                      {currentProgress.chat.length === 0 ? (
-                        <p className="text-sm text-muted">Ask about your submitted review, missed reasoning, or better implementation shape.</p>
-                      ) : (
-                        currentProgress.chat.map((message) => (
-                          <div
-                            key={message.id}
-                            className={cn(
-                              "rounded-md p-3 text-sm leading-6 shadow-[inset_0_0_0_1px_hsl(var(--line))]",
-                              message.role === "user" ? "bg-surface" : "bg-accent/5"
-                            )}
-                          >
-                            <div className="mb-1 text-xs font-semibold capitalize text-muted">{message.role}</div>
-                            <p className="text-pretty whitespace-pre-wrap">{message.content}</p>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                    <div className="border-t border-line p-3">
-                      <Textarea
-                        aria-label="Discussion message"
-                        name={`${exercise.id}-discussion-message`}
-                        autoComplete="off"
-                        className="min-h-24"
-                        value={chatDraft}
-                        placeholder="Ask a follow-up after submission…"
-                        onChange={(event) => setChatDraft(event.target.value)}
-                      />
-                      <Button className="mt-2 w-full" onClick={sendChat} disabled={chatSending || !chatDraft.trim()}>
-                        {chatSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageSquare className="h-4 w-4" />}
-                        Send
-                      </Button>
-                    </div>
-                  </Panel>
+                  <ChatPanel
+                    title="PR Discussion"
+                    emptyText="Ask about your submitted review, missed reasoning, or better implementation shape."
+                    placeholder="Ask a follow-up after submission..."
+                    inputName={`${exercise.id}-discussion-message`}
+                    messages={currentProgress.chat}
+                    draft={chatDraft}
+                    sending={chatSending}
+                    onDraftChange={setChatDraft}
+                    onSend={sendChat}
+                  />
                 </>
               ) : null}
             </div>
@@ -689,6 +687,112 @@ export function TrainingApp() {
       </div>
     </main>
   );
+}
+
+function ChatPanel({
+  title,
+  emptyText,
+  placeholder,
+  inputName,
+  messages,
+  draft,
+  sending,
+  onDraftChange,
+  onSend,
+}: {
+  title: string;
+  emptyText: string;
+  placeholder: string;
+  inputName: string;
+  messages: ChatMessage[];
+  draft: string;
+  sending: boolean;
+  onDraftChange: (value: string) => void;
+  onSend: () => void;
+}) {
+  return (
+    <Panel className="overflow-hidden bg-panel/70">
+      <div className="flex items-center gap-2 border-b border-line px-4 py-3">
+        <MessageSquare className="h-4 w-4 text-accent" />
+        <h2 className="text-sm font-semibold">{title}</h2>
+      </div>
+      <div className="max-h-72 space-y-3 overflow-auto p-4 scrollbar-thin">
+        {messages.length === 0 ? (
+          <p className="text-pretty text-sm leading-6 text-muted">{emptyText}</p>
+        ) : (
+          messages.map((message) => (
+            <div
+              key={message.id}
+              className={cn(
+                "rounded-md p-3 text-sm leading-6 shadow-[inset_0_0_0_1px_hsl(var(--line))]",
+                message.role === "user" ? "bg-surface" : "bg-accent/5"
+              )}
+            >
+              <div className="mb-1 text-xs font-semibold capitalize text-muted">{message.role}</div>
+              <p className="text-pretty whitespace-pre-wrap">{message.content}</p>
+            </div>
+          ))
+        )}
+      </div>
+      <form
+        className="border-t border-line p-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSend();
+        }}
+      >
+        <Textarea
+          aria-label={title}
+          name={inputName}
+          autoComplete="off"
+          className="min-h-24"
+          value={draft}
+          placeholder={placeholder}
+          onChange={(event) => onDraftChange(event.target.value)}
+        />
+        <Button type="submit" className="mt-2 w-full" disabled={sending || !draft.trim()}>
+          {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageSquare className="h-4 w-4" />}
+          Send
+        </Button>
+      </form>
+    </Panel>
+  );
+}
+
+function buildChatExercisePayload(exercise: Exercise, submitted: boolean) {
+  return {
+    publicContext: {
+      id: exercise.id,
+      title: exercise.title,
+      sourceRepo: exercise.sourceRepo,
+      repoArea: exercise.repoArea,
+      difficulty: exercise.difficulty,
+      representedDiffLines: exercise.representedDiffLines,
+      prDescription: exercise.prDescription,
+      existingCodeContext: exercise.existingCodeContext,
+      learnerTask: exercise.learnerTask,
+      reviewSurface: exercise.reviewSurface,
+      diffSummary: {
+        fileCount: exercise.diff.fileCount,
+        additions: exercise.diff.additions,
+        deletions: exercise.diff.deletions,
+        files: exercise.diff.files.map((file) => ({
+          path: file.newPath,
+          language: file.language,
+          additions: file.additions,
+          deletions: file.deletions,
+          hunks: file.hunks.map((hunk) => hunk.header),
+        })),
+      },
+    },
+    hiddenAnswerKey: submitted
+      ? {
+          flaws: exercise.flaws,
+          debrief: exercise.debrief,
+          verdictRubric: exercise.verdictRubric,
+        }
+      : null,
+  };
 }
 
 function TabButton({
