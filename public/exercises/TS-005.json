@@ -1,0 +1,4114 @@
+{
+  "id": "TS-005",
+  "slug": "TS-005-medusa-order-tags",
+  "title": "Medusa Order Tags For Internal Operations",
+  "sourceFile": "curriculum/exercises/TS-005-medusa-order-tags.md",
+  "sourceRepo": {
+    "label": "medusajs/medusa",
+    "url": "https://github.com/medusajs/medusa"
+  },
+  "repoArea": "admin order API, order module model, order update workflow, order change audit records, event emission, database migration",
+  "difficulty": 1,
+  "targetDiffLines": 605,
+  "representedDiffLines": 605,
+  "mode": "synthetic_degraded",
+  "prDescription": "This PR adds internal order tags for operations teams.\n\nAdmins can tag orders with labels such as `vip`, `fraud-review`, `warehouse-hold`, or `priority`. Tags are returned in admin order list/detail responses and can be replaced, appended, or removed through new admin endpoints.\n\nThe PR adds:\n\n- a `tags` field on orders,\n- migration support for the new field,\n- admin response/query support,\n- tag validators and normalization helpers,\n- `POST /admin/orders/:id/tags` and `DELETE /admin/orders/:id/tags/:tag`,\n- tests for adding, replacing, removing, and deduplicating tags.",
+  "existingCodeContext": "The real Medusa codebase already has these relevant contracts:\n\n- `packages/medusa/src/api/admin/orders/[id]/route.ts` updates orders by running `updateOrderWorkflow(req.scope).run(...)`, then re-queries the order through the query graph.\n- `packages/core/core-flows/src/order/workflows/update-order.ts` validates order updates, calls `updateOrdersStep`, registers order changes with `created_by` and `confirmed_by`, and emits `OrderWorkflowEvents.UPDATED`.\n- `packages/core/core-flows/src/order/steps/update-orders.ts` wraps order service updates as a workflow step and records previous data for compensation.\n- `packages/modules/order/src/models/order.ts` models order-owned columns such as status, locale, metadata, addresses, summaries, line items, shipping methods, transactions, and returns.\n- `metadata` exists for custom extension data, but Medusa workflows use explicit order changes and events for product-visible order state transitions.\n- Admin order list/detail field selection is controlled by `packages/medusa/src/api/admin/orders/query-config.ts`.",
+  "learnerTask": "Review the PR. Identify the two intended flaws. For each flaw:\n\n1. Name the flaw.\n2. Cite the relevant file and line range from the diff.\n3. Explain the production impact.\n4. Suggest the better implementation direction.",
+  "reviewSurface": [
+    "packages/modules/order/src/models/order.ts",
+    "packages/modules/order/src/types/order.ts",
+    "packages/modules/order/src/schema/index.ts",
+    "packages/modules/order/src/migrations/Migration20260501123000.ts",
+    "packages/medusa/src/api/admin/orders/query-config.ts",
+    "packages/medusa/src/api/admin/orders/validators.ts",
+    "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts",
+    "packages/medusa/src/api/admin/orders/[id]/tags/route.ts",
+    "integration-tests/http/__tests__/order/admin/order-tags.spec.ts"
+  ],
+  "diff": {
+    "raw": "diff --git a/packages/modules/order/src/models/order.ts b/packages/modules/order/src/models/order.ts\nindex f1893c984f..2df12b1071 100644\n--- a/packages/modules/order/src/models/order.ts\n+++ b/packages/modules/order/src/models/order.ts\n@@ -19,6 +19,7 @@ const _Order = model\n     locale: model.text().nullable(),\n     no_notification: model.boolean().nullable(),\n     metadata: model.json().nullable(),\n+    tags: model.json().nullable(),\n     canceled_at: model.dateTime().nullable(),\n     shipping_address: model\n       .hasOne<any>(() => OrderAddress, {\n@@ -74,6 +75,14 @@ const _Order = model\n       unique: false,\n       where: \"deleted_at IS NULL\",\n     },\n+    {\n+      name: \"IDX_order_tags\",\n+      on: [\"tags\"],\n+      unique: false,\n+      where: \"deleted_at IS NULL\",\n+    },\n     {\n       name: \"IDX_order_deleted_at\",\n       on: [\"deleted_at\"],\ndiff --git a/packages/modules/order/src/types/order.ts b/packages/modules/order/src/types/order.ts\nindex a933ab82b2..a716654bd7 100644\n--- a/packages/modules/order/src/types/order.ts\n+++ b/packages/modules/order/src/types/order.ts\n@@ -8,6 +8,7 @@ export interface CreateOrderDTO {\n   status?: OrderStatus\n   no_notification?: boolean\n   metadata?: Record<string, unknown> | null\n+  tags?: string[] | null\n }\n \n export interface UpdateOrderDTO {\n@@ -21,6 +22,7 @@ export interface UpdateOrderDTO {\n   status?: OrderStatus\n   no_notification?: boolean\n   metadata?: Record<string, unknown> | null\n+  tags?: string[] | null\n }\n+\n+export type OrderTag = string\n+\n+export type OrderTagChange = {\n+  order_id: string\n+  tags: OrderTag[]\n+  actor_id?: string\n+}\ndiff --git a/packages/modules/order/src/schema/index.ts b/packages/modules/order/src/schema/index.ts\nindex 4f11d8c7bb..5f08111237 100644\n--- a/packages/modules/order/src/schema/index.ts\n+++ b/packages/modules/order/src/schema/index.ts\n@@ -17,6 +17,7 @@ type Order {\n   locale: String\n   no_notification: Boolean\n   metadata: JSON\n+  tags: [String!]\n   canceled_at: DateTime\n   shipping_address: OrderAddress\n   billing_address: OrderAddress\n@@ -72,6 +73,7 @@ input CreateOrderInput {\n   status: String\n   no_notification: Boolean\n   metadata: JSON\n+  tags: [String!]\n }\n \n input UpdateOrderInput {\n@@ -84,5 +86,6 @@ input UpdateOrderInput {\n   status: String\n   no_notification: Boolean\n   metadata: JSON\n+  tags: [String!]\n }\n `\ndiff --git a/packages/modules/order/src/migrations/Migration20260501123000.ts b/packages/modules/order/src/migrations/Migration20260501123000.ts\nnew file mode 100644\nindex 0000000000..61e0bd9351\n--- /dev/null\n+++ b/packages/modules/order/src/migrations/Migration20260501123000.ts\n@@ -0,0 +1,69 @@\n+import { Migration } from \"@medusajs/framework/mikro-orm/migrations\"\n+\n+export class Migration20260501123000 extends Migration {\n+  async up(): Promise<void> {\n+    this.addSql(\n+      'alter table if exists \"order\" add column if not exists \"tags\" jsonb null;'\n+    )\n+\n+    this.addSql(\n+      'create index if not exists \"IDX_order_tags\" on \"order\" using gin (\"tags\") where \"deleted_at\" is null;'\n+    )\n+\n+    this.addSql(`\n+      update \"order\"\n+      set \"tags\" = coalesce(\n+        case\n+          when jsonb_typeof(\"metadata\"->'tags') = 'array' then \"metadata\"->'tags'\n+          when jsonb_typeof(\"metadata\"->'internal_tags') = 'array' then \"metadata\"->'internal_tags'\n+          else '[]'::jsonb\n+        end,\n+        '[]'::jsonb\n+      )\n+      where \"tags\" is null\n+        and \"deleted_at\" is null\n+        and (\n+          jsonb_typeof(\"metadata\"->'tags') = 'array'\n+          or jsonb_typeof(\"metadata\"->'internal_tags') = 'array'\n+        );\n+    `)\n+  }\n+\n+  async down(): Promise<void> {\n+    this.addSql('drop index if exists \"IDX_order_tags\";')\n+    this.addSql('alter table if exists \"order\" drop column if exists \"tags\";')\n+  }\n+}\ndiff --git a/packages/medusa/src/api/admin/orders/query-config.ts b/packages/medusa/src/api/admin/orders/query-config.ts\nindex 225c8c6731..f750297bd4 100644\n--- a/packages/medusa/src/api/admin/orders/query-config.ts\n+++ b/packages/medusa/src/api/admin/orders/query-config.ts\n@@ -11,6 +11,7 @@ export const defaultAdminOrderFields = [\n   \"total\",\n   \"metadata\",\n   \"locale\",\n+  \"tags\",\n   \"created_at\",\n   \"updated_at\",\n ]\n@@ -32,6 +33,7 @@ export const defaultAdminRetrieveOrderFields = [\n   \"original_item_tax_total\",\n   \"shipping_total\",\n   \"shipping_subtotal\",\n+  \"tags\",\n   \"shipping_tax_total\",\n   \"original_shipping_tax_total\",\n   \"original_shipping_subtotal\",\n@@ -104,6 +106,7 @@ export const defaultAdminExportOrderFields = [\n   \"currency_code\",\n   \"region_id\",\n   \"subtotal\",\n+  \"tags\",\n   \"tax_total\",\n   \"shipping_total\",\n   \"discount_total\",\ndiff --git a/packages/medusa/src/api/admin/orders/validators.ts b/packages/medusa/src/api/admin/orders/validators.ts\nindex 016d68fe72..e07b8cf665 100644\n--- a/packages/medusa/src/api/admin/orders/validators.ts\n+++ b/packages/medusa/src/api/admin/orders/validators.ts\n@@ -128,6 +128,47 @@ export const AdminTransferOrder = z.object({\n   update_order_email: z.boolean().optional(),\n })\n \n+const OrderTag = z\n+  .string()\n+  .trim()\n+  .min(1)\n+  .max(40)\n+  .regex(/^[a-zA-Z0-9 _.-]+$/)\n+\n+const OrderTagArray = z.array(OrderTag).max(50)\n+\n+export type AdminOrderTagsBodyType = z.infer<typeof AdminOrderTagsBody>\n+export const AdminOrderTagsBody = z.object({\n+  tags: OrderTagArray,\n+  mode: z.enum([\"append\", \"replace\"]).default(\"append\"),\n+})\n+\n+export type AdminDeleteOrderTagParamsType = z.infer<\n+  typeof AdminDeleteOrderTagParams\n+>\n+export const AdminDeleteOrderTagParams = z.object({\n+  tag: OrderTag,\n+})\n+\n+export const AdminOrderTagsQuery = z.object({\n+  fields: z.string().optional(),\n+})\n+\n+export type AdminOrderTagsResponse = {\n+  order: {\n+    id: string\n+    tags: string[]\n+    metadata?: Record<string, unknown> | null\n+  }\n+}\n+\n export type AdminUpdateOrderType = z.infer<typeof AdminUpdateOrder>\n export const AdminUpdateOrder = z.object({\n   email: z.string().optional(),\n   shipping_address: AddressPayload.optional(),\n   billing_address: AddressPayload.optional(),\n   locale: z.string().nullish(),\n   metadata: z.record(z.string(), z.unknown()).nullish(),\n+  tags: OrderTagArray.nullish(),\n })\ndiff --git a/packages/medusa/src/api/admin/orders/[id]/tags/utils.ts b/packages/medusa/src/api/admin/orders/[id]/tags/utils.ts\nnew file mode 100644\nindex 0000000000..1ae8e951b8\n--- /dev/null\n+++ b/packages/medusa/src/api/admin/orders/[id]/tags/utils.ts\n@@ -0,0 +1,113 @@\n+export type OrderTagOperation = \"append\" | \"replace\"\n+\n+export type OrderWithTags = {\n+  id: string\n+  tags?: string[] | null\n+  metadata?: Record<string, unknown> | null\n+}\n+\n+export type OrderTagAuditSnapshot = {\n+  before: string[]\n+  after: string[]\n+  changed: string[]\n+}\n+\n+export const normalizeOrderTag = (tag: string): string => {\n+  return tag.trim()\n+}\n+\n+export const normalizeOrderTags = (tags: string[]): string[] => {\n+  const seen = new Set<string>()\n+  const result: string[] = []\n+\n+  for (const raw of tags) {\n+    const tag = normalizeOrderTag(raw)\n+\n+    if (!tag) {\n+      continue\n+    }\n+\n+    if (seen.has(tag)) {\n+      continue\n+    }\n+\n+    seen.add(tag)\n+    result.push(tag)\n+  }\n+\n+  return result.slice(0, 50)\n+}\n+\n+export const getExistingOrderTags = (order: OrderWithTags): string[] => {\n+  if (Array.isArray(order.tags)) {\n+    return normalizeOrderTags(order.tags)\n+  }\n+\n+  if (Array.isArray(order.metadata?.tags)) {\n+    return normalizeOrderTags(order.metadata.tags as string[])\n+  }\n+\n+  if (Array.isArray(order.metadata?.internal_tags)) {\n+    return normalizeOrderTags(order.metadata.internal_tags as string[])\n+  }\n+\n+  return []\n+}\n+\n+export const applyOrderTagOperation = ({\n+  existing,\n+  incoming,\n+  mode,\n+}: {\n+  existing: string[]\n+  incoming: string[]\n+  mode: OrderTagOperation\n+}): string[] => {\n+  const normalizedIncoming = normalizeOrderTags(incoming)\n+\n+  if (mode === \"replace\") {\n+    return normalizedIncoming\n+  }\n+\n+  return normalizeOrderTags([...existing, ...normalizedIncoming])\n+}\n+\n+export const removeOrderTag = ({\n+  existing,\n+  tag,\n+}: {\n+  existing: string[]\n+  tag: string\n+}): string[] => {\n+  const normalized = normalizeOrderTag(tag)\n+\n+  return existing.filter((existingTag) => existingTag !== normalized)\n+}\n+\n+export const getOrderTagAuditSnapshot = ({\n+  before,\n+  after,\n+}: {\n+  before: string[]\n+  after: string[]\n+}): OrderTagAuditSnapshot => {\n+  const beforeSet = new Set(before)\n+  const afterSet = new Set(after)\n+  const changed = [\n+    ...after.filter((tag) => !beforeSet.has(tag)),\n+    ...before.filter((tag) => !afterSet.has(tag)),\n+  ]\n+\n+  return {\n+    before,\n+    after,\n+    changed,\n+  }\n+}\n+\n+export const mergeOrderTagMetadata = ({\n+  metadata,\n+  tags,\n+  actorId,\n+}: {\n+  metadata?: Record<string, unknown> | null\n+  tags: string[]\n+  actorId?: string\n+}) => {\n+  return {\n+    ...(metadata ?? {}),\n+    internal_tags: tags,\n+    internal_tags_updated_by: actorId,\n+    internal_tags_updated_at: new Date().toISOString(),\n+  }\n+}\ndiff --git a/packages/medusa/src/api/admin/orders/[id]/tags/route.ts b/packages/medusa/src/api/admin/orders/[id]/tags/route.ts\nnew file mode 100644\nindex 0000000000..704c62ad79\n--- /dev/null\n+++ b/packages/medusa/src/api/admin/orders/[id]/tags/route.ts\n@@ -0,0 +1,184 @@\n+import type { IOrderModuleService } from \"@medusajs/framework/types\"\n+import {\n+  AuthenticatedMedusaRequest,\n+  MedusaResponse,\n+} from \"@medusajs/framework/http\"\n+import {\n+  ContainerRegistrationKeys,\n+  MedusaError,\n+  Modules,\n+} from \"@medusajs/framework/utils\"\n+import { AdminOrder } from \"@medusajs/framework/types\"\n+import {\n+  AdminDeleteOrderTagParamsType,\n+  AdminOrderTagsBodyType,\n+} from \"../../../validators\"\n+import {\n+  applyOrderTagOperation,\n+  getExistingOrderTags,\n+  getOrderTagAuditSnapshot,\n+  mergeOrderTagMetadata,\n+  removeOrderTag,\n+} from \"./utils\"\n+\n+const ORDER_TAG_FIELDS = [\"id\", \"tags\", \"metadata\"] as const\n+\n+const readOrderForTags = async (\n+  orderModuleService: IOrderModuleService,\n+  orderId: string\n+) => {\n+  const [order] = await orderModuleService.listOrders(\n+    { id: orderId },\n+    {\n+      select: [...ORDER_TAG_FIELDS],\n+    }\n+  )\n+\n+  if (!order) {\n+    throw new MedusaError(\n+      MedusaError.Types.NOT_FOUND,\n+      `Order ${orderId} was not found`\n+    )\n+  }\n+\n+  return order\n+}\n+\n+export const POST = async (\n+  req: AuthenticatedMedusaRequest<\n+    AdminOrderTagsBodyType,\n+    {\n+      id: string\n+    }\n+  >,\n+  res: MedusaResponse\n+) => {\n+  const orderModuleService = req.scope.resolve<IOrderModuleService>(\n+    Modules.ORDER\n+  )\n+  const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)\n+\n+  const order = await readOrderForTags(orderModuleService, req.params.id)\n+  const existingTags = getExistingOrderTags(order)\n+  const nextTags = applyOrderTagOperation({\n+    existing: existingTags,\n+    incoming: req.validatedBody.tags,\n+    mode: req.validatedBody.mode,\n+  })\n+  const audit = getOrderTagAuditSnapshot({\n+    before: existingTags,\n+    after: nextTags,\n+  })\n+\n+  await orderModuleService.updateOrders(req.params.id, {\n+    id: req.params.id,\n+    tags: nextTags,\n+    metadata: mergeOrderTagMetadata({\n+      metadata: order.metadata,\n+      tags: nextTags,\n+      actorId: req.auth_context.actor_id,\n+    }),\n+  })\n+\n+  req.scope\n+    .resolve(\"logger\")\n+    .info(\n+      `Updated order tags for ${req.params.id}: ${audit.changed.join(\",\")}`\n+    )\n+\n+  const result = await query.graph({\n+    entity: \"order\",\n+    filters: {\n+      id: req.params.id,\n+    },\n+    fields: req.queryConfig.fields,\n+  })\n+\n+  res.status(200).json({\n+    order: result.data[0] as AdminOrder,\n+  })\n+}\n+\n+export const DELETE = async (\n+  req: AuthenticatedMedusaRequest<\n+    never,\n+    {\n+      id: string\n+      tag: AdminDeleteOrderTagParamsType[\"tag\"]\n+    }\n+  >,\n+  res: MedusaResponse\n+) => {\n+  const orderModuleService = req.scope.resolve<IOrderModuleService>(\n+    Modules.ORDER\n+  )\n+  const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)\n+\n+  const order = await readOrderForTags(orderModuleService, req.params.id)\n+  const existingTags = getExistingOrderTags(order)\n+  const nextTags = removeOrderTag({\n+    existing: existingTags,\n+    tag: req.params.tag,\n+  })\n+  const audit = getOrderTagAuditSnapshot({\n+    before: existingTags,\n+    after: nextTags,\n+  })\n+\n+  await orderModuleService.updateOrders(req.params.id, {\n+    id: req.params.id,\n+    tags: nextTags,\n+    metadata: mergeOrderTagMetadata({\n+      metadata: order.metadata,\n+      tags: nextTags,\n+      actorId: req.auth_context.actor_id,\n+    }),\n+  })\n+\n+  req.scope\n+    .resolve(\"logger\")\n+    .info(\n+      `Removed order tag for ${req.params.id}: ${audit.changed.join(\",\")}`\n+    )\n+\n+  const result = await query.graph({\n+    entity: \"order\",\n+    filters: {\n+      id: req.params.id,\n+    },\n+    fields: req.queryConfig.fields,\n+  })\n+\n+  res.status(200).json({\n+    order: result.data[0] as AdminOrder,\n+  })\n+}\ndiff --git a/integration-tests/http/__tests__/order/admin/order-tags.spec.ts b/integration-tests/http/__tests__/order/admin/order-tags.spec.ts\nnew file mode 100644\nindex 0000000000..1d90228aa0\n--- /dev/null\n+++ b/integration-tests/http/__tests__/order/admin/order-tags.spec.ts\n@@ -0,0 +1,170 @@\n+import {\n+  adminHeaders,\n+  createAdminUser,\n+} from \"../../../helpers/create-admin-user\"\n+import { medusaIntegrationTestRunner } from \"../../../medusa-test-runner\"\n+import { createOrderSeeder } from \"../../helpers/order\"\n+\n+medusaIntegrationTestRunner({\n+  testSuite: ({ api, getContainer }) => {\n+    describe(\"Admin order tags\", () => {\n+      let orderId: string\n+\n+      beforeEach(async () => {\n+        await createAdminUser(getContainer())\n+\n+        const seeder = createOrderSeeder({ api, getContainer })\n+        const order = await seeder.create({\n+          email: \"order-tags@example.com\",\n+          currency_code: \"usd\",\n+        })\n+\n+        orderId = order.id\n+      })\n+\n+      it(\"appends tags to an order\", async () => {\n+        const response = await api.post(\n+          `/admin/orders/${orderId}/tags`,\n+          {\n+            tags: [\"vip\", \"warehouse-hold\"],\n+          },\n+          adminHeaders\n+        )\n+\n+        expect(response.status).toBe(200)\n+        expect(response.data.order.tags).toEqual([\"vip\", \"warehouse-hold\"])\n+      })\n+\n+      it(\"deduplicates exact repeated tags\", async () => {\n+        const response = await api.post(\n+          `/admin/orders/${orderId}/tags`,\n+          {\n+            tags: [\"vip\", \"vip\"],\n+          },\n+          adminHeaders\n+        )\n+\n+        expect(response.status).toBe(200)\n+        expect(response.data.order.tags).toEqual([\"vip\"])\n+      })\n+\n+      it(\"replaces tags when requested\", async () => {\n+        await api.post(\n+          `/admin/orders/${orderId}/tags`,\n+          {\n+            tags: [\"vip\", \"fraud-review\"],\n+          },\n+          adminHeaders\n+        )\n+\n+        const response = await api.post(\n+          `/admin/orders/${orderId}/tags`,\n+          {\n+            mode: \"replace\",\n+            tags: [\"priority\"],\n+          },\n+          adminHeaders\n+        )\n+\n+        expect(response.status).toBe(200)\n+        expect(response.data.order.tags).toEqual([\"priority\"])\n+      })\n+\n+      it(\"removes a tag\", async () => {\n+        await api.post(\n+          `/admin/orders/${orderId}/tags`,\n+          {\n+            tags: [\"vip\", \"fraud-review\"],\n+          },\n+          adminHeaders\n+        )\n+\n+        const response = await api.delete(\n+          `/admin/orders/${orderId}/tags/vip`,\n+          adminHeaders\n+        )\n+\n+        expect(response.status).toBe(200)\n+        expect(response.data.order.tags).toEqual([\"fraud-review\"])\n+      })\n+\n+      it(\"returns tags in the order detail response\", async () => {\n+        await api.post(\n+          `/admin/orders/${orderId}/tags`,\n+          {\n+            tags: [\"vip\"],\n+          },\n+          adminHeaders\n+        )\n+\n+        const response = await api.get(\n+          `/admin/orders/${orderId}`,\n+          adminHeaders\n+        )\n+\n+        expect(response.status).toBe(200)\n+        expect(response.data.order.tags).toEqual([\"vip\"])\n+      })\n+    })\n+  },\n+})",
+    "files": [
+      {
+        "oldPath": "packages/modules/order/src/models/order.ts",
+        "newPath": "packages/modules/order/src/models/order.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -19,6 +19,7 @@ const _Order = model",
+            "oldStart": 19,
+            "newStart": 19,
+            "lines": [
+              {
+                "id": "packages/modules/order/src/models/order.ts:19",
+                "type": "context",
+                "oldLine": 19,
+                "newLine": 19,
+                "content": "    locale: model.text().nullable(),"
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:20",
+                "type": "context",
+                "oldLine": 20,
+                "newLine": 20,
+                "content": "    no_notification: model.boolean().nullable(),"
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:21",
+                "type": "context",
+                "oldLine": 21,
+                "newLine": 21,
+                "content": "    metadata: model.json().nullable(),"
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:22",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 22,
+                "content": "    tags: model.json().nullable(),"
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:23",
+                "type": "context",
+                "oldLine": 22,
+                "newLine": 23,
+                "content": "    canceled_at: model.dateTime().nullable(),"
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:24",
+                "type": "context",
+                "oldLine": 23,
+                "newLine": 24,
+                "content": "    shipping_address: model"
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:25",
+                "type": "context",
+                "oldLine": 24,
+                "newLine": 25,
+                "content": "      .hasOne<any>(() => OrderAddress, {"
+              }
+            ]
+          },
+          {
+            "header": "@@ -74,6 +75,14 @@ const _Order = model",
+            "oldStart": 74,
+            "newStart": 75,
+            "lines": [
+              {
+                "id": "packages/modules/order/src/models/order.ts:75",
+                "type": "context",
+                "oldLine": 74,
+                "newLine": 75,
+                "content": "      unique: false,"
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:76",
+                "type": "context",
+                "oldLine": 75,
+                "newLine": 76,
+                "content": "      where: \"deleted_at IS NULL\","
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:77",
+                "type": "context",
+                "oldLine": 76,
+                "newLine": 77,
+                "content": "    },"
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:78",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 78,
+                "content": "    {"
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:79",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 79,
+                "content": "      name: \"IDX_order_tags\","
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:80",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 80,
+                "content": "      on: [\"tags\"],"
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:81",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 81,
+                "content": "      unique: false,"
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:82",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 82,
+                "content": "      where: \"deleted_at IS NULL\","
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:83",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 83,
+                "content": "    },"
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:84",
+                "type": "context",
+                "oldLine": 77,
+                "newLine": 84,
+                "content": "    {"
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:85",
+                "type": "context",
+                "oldLine": 78,
+                "newLine": 85,
+                "content": "      name: \"IDX_order_deleted_at\","
+              },
+              {
+                "id": "packages/modules/order/src/models/order.ts:86",
+                "type": "context",
+                "oldLine": 79,
+                "newLine": 86,
+                "content": "      on: [\"deleted_at\"],"
+              }
+            ]
+          }
+        ],
+        "additions": 7,
+        "deletions": 0
+      },
+      {
+        "oldPath": "packages/modules/order/src/types/order.ts",
+        "newPath": "packages/modules/order/src/types/order.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -8,6 +8,7 @@ export interface CreateOrderDTO {",
+            "oldStart": 8,
+            "newStart": 8,
+            "lines": [
+              {
+                "id": "packages/modules/order/src/types/order.ts:8",
+                "type": "context",
+                "oldLine": 8,
+                "newLine": 8,
+                "content": "  status?: OrderStatus"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:9",
+                "type": "context",
+                "oldLine": 9,
+                "newLine": 9,
+                "content": "  no_notification?: boolean"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:10",
+                "type": "context",
+                "oldLine": 10,
+                "newLine": 10,
+                "content": "  metadata?: Record<string, unknown> | null"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:11",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 11,
+                "content": "  tags?: string[] | null"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:12",
+                "type": "context",
+                "oldLine": 11,
+                "newLine": 12,
+                "content": "}"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:13",
+                "type": "context",
+                "oldLine": 12,
+                "newLine": 13,
+                "content": ""
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:14",
+                "type": "context",
+                "oldLine": 13,
+                "newLine": 14,
+                "content": "export interface UpdateOrderDTO {"
+              }
+            ]
+          },
+          {
+            "header": "@@ -21,6 +22,7 @@ export interface UpdateOrderDTO {",
+            "oldStart": 21,
+            "newStart": 22,
+            "lines": [
+              {
+                "id": "packages/modules/order/src/types/order.ts:22",
+                "type": "context",
+                "oldLine": 21,
+                "newLine": 22,
+                "content": "  status?: OrderStatus"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:23",
+                "type": "context",
+                "oldLine": 22,
+                "newLine": 23,
+                "content": "  no_notification?: boolean"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:24",
+                "type": "context",
+                "oldLine": 23,
+                "newLine": 24,
+                "content": "  metadata?: Record<string, unknown> | null"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:25",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 25,
+                "content": "  tags?: string[] | null"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:26",
+                "type": "context",
+                "oldLine": 24,
+                "newLine": 26,
+                "content": "}"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:27",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 27,
+                "content": ""
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:28",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 28,
+                "content": "export type OrderTag = string"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:29",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 29,
+                "content": ""
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:30",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 30,
+                "content": "export type OrderTagChange = {"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:31",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 31,
+                "content": "  order_id: string"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:32",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 32,
+                "content": "  tags: OrderTag[]"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:33",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 33,
+                "content": "  actor_id?: string"
+              },
+              {
+                "id": "packages/modules/order/src/types/order.ts:34",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 34,
+                "content": "}"
+              }
+            ]
+          }
+        ],
+        "additions": 10,
+        "deletions": 0
+      },
+      {
+        "oldPath": "packages/modules/order/src/schema/index.ts",
+        "newPath": "packages/modules/order/src/schema/index.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -17,6 +17,7 @@ type Order {",
+            "oldStart": 17,
+            "newStart": 17,
+            "lines": [
+              {
+                "id": "packages/modules/order/src/schema/index.ts:17",
+                "type": "context",
+                "oldLine": 17,
+                "newLine": 17,
+                "content": "  locale: String"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:18",
+                "type": "context",
+                "oldLine": 18,
+                "newLine": 18,
+                "content": "  no_notification: Boolean"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:19",
+                "type": "context",
+                "oldLine": 19,
+                "newLine": 19,
+                "content": "  metadata: JSON"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:20",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 20,
+                "content": "  tags: [String!]"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:21",
+                "type": "context",
+                "oldLine": 20,
+                "newLine": 21,
+                "content": "  canceled_at: DateTime"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:22",
+                "type": "context",
+                "oldLine": 21,
+                "newLine": 22,
+                "content": "  shipping_address: OrderAddress"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:23",
+                "type": "context",
+                "oldLine": 22,
+                "newLine": 23,
+                "content": "  billing_address: OrderAddress"
+              }
+            ]
+          },
+          {
+            "header": "@@ -72,6 +73,7 @@ input CreateOrderInput {",
+            "oldStart": 72,
+            "newStart": 73,
+            "lines": [
+              {
+                "id": "packages/modules/order/src/schema/index.ts:73",
+                "type": "context",
+                "oldLine": 72,
+                "newLine": 73,
+                "content": "  status: String"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:74",
+                "type": "context",
+                "oldLine": 73,
+                "newLine": 74,
+                "content": "  no_notification: Boolean"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:75",
+                "type": "context",
+                "oldLine": 74,
+                "newLine": 75,
+                "content": "  metadata: JSON"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:76",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 76,
+                "content": "  tags: [String!]"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:77",
+                "type": "context",
+                "oldLine": 75,
+                "newLine": 77,
+                "content": "}"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:78",
+                "type": "context",
+                "oldLine": 76,
+                "newLine": 78,
+                "content": ""
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:79",
+                "type": "context",
+                "oldLine": 77,
+                "newLine": 79,
+                "content": "input UpdateOrderInput {"
+              }
+            ]
+          },
+          {
+            "header": "@@ -84,5 +86,6 @@ input UpdateOrderInput {",
+            "oldStart": 84,
+            "newStart": 86,
+            "lines": [
+              {
+                "id": "packages/modules/order/src/schema/index.ts:86",
+                "type": "context",
+                "oldLine": 84,
+                "newLine": 86,
+                "content": "  status: String"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:87",
+                "type": "context",
+                "oldLine": 85,
+                "newLine": 87,
+                "content": "  no_notification: Boolean"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:88",
+                "type": "context",
+                "oldLine": 86,
+                "newLine": 88,
+                "content": "  metadata: JSON"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:89",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 89,
+                "content": "  tags: [String!]"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:90",
+                "type": "context",
+                "oldLine": 87,
+                "newLine": 90,
+                "content": "}"
+              },
+              {
+                "id": "packages/modules/order/src/schema/index.ts:91",
+                "type": "context",
+                "oldLine": 88,
+                "newLine": 91,
+                "content": "`"
+              }
+            ]
+          }
+        ],
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "oldPath": "packages/modules/order/src/migrations/Migration20260501123000.ts",
+        "newPath": "packages/modules/order/src/migrations/Migration20260501123000.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -0,0 +1,69 @@",
+            "oldStart": 0,
+            "newStart": 1,
+            "lines": [
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:1",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1,
+                "content": "import { Migration } from \"@medusajs/framework/mikro-orm/migrations\""
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:2",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 2,
+                "content": ""
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:3",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 3,
+                "content": "export class Migration20260501123000 extends Migration {"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:4",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 4,
+                "content": "  async up(): Promise<void> {"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:5",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 5,
+                "content": "    this.addSql("
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:6",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 6,
+                "content": "      'alter table if exists \"order\" add column if not exists \"tags\" jsonb null;'"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:7",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 7,
+                "content": "    )"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:8",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 8,
+                "content": ""
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:9",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 9,
+                "content": "    this.addSql("
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:10",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 10,
+                "content": "      'create index if not exists \"IDX_order_tags\" on \"order\" using gin (\"tags\") where \"deleted_at\" is null;'"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:11",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 11,
+                "content": "    )"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:12",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 12,
+                "content": ""
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:13",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 13,
+                "content": "    this.addSql(`"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:14",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 14,
+                "content": "      update \"order\""
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:15",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 15,
+                "content": "      set \"tags\" = coalesce("
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:16",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 16,
+                "content": "        case"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:17",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 17,
+                "content": "          when jsonb_typeof(\"metadata\"->'tags') = 'array' then \"metadata\"->'tags'"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:18",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 18,
+                "content": "          when jsonb_typeof(\"metadata\"->'internal_tags') = 'array' then \"metadata\"->'internal_tags'"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:19",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 19,
+                "content": "          else '[]'::jsonb"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:20",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 20,
+                "content": "        end,"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:21",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 21,
+                "content": "        '[]'::jsonb"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:22",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 22,
+                "content": "      )"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:23",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 23,
+                "content": "      where \"tags\" is null"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:24",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 24,
+                "content": "        and \"deleted_at\" is null"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:25",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 25,
+                "content": "        and ("
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:26",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 26,
+                "content": "          jsonb_typeof(\"metadata\"->'tags') = 'array'"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:27",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 27,
+                "content": "          or jsonb_typeof(\"metadata\"->'internal_tags') = 'array'"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:28",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 28,
+                "content": "        );"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:29",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 29,
+                "content": "    `)"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:30",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 30,
+                "content": "  }"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:31",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 31,
+                "content": ""
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:32",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 32,
+                "content": "  async down(): Promise<void> {"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:33",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 33,
+                "content": "    this.addSql('drop index if exists \"IDX_order_tags\";')"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:34",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 34,
+                "content": "    this.addSql('alter table if exists \"order\" drop column if exists \"tags\";')"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:35",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 35,
+                "content": "  }"
+              },
+              {
+                "id": "packages/modules/order/src/migrations/Migration20260501123000.ts:36",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 36,
+                "content": "}"
+              }
+            ]
+          }
+        ],
+        "additions": 36,
+        "deletions": 0
+      },
+      {
+        "oldPath": "packages/medusa/src/api/admin/orders/query-config.ts",
+        "newPath": "packages/medusa/src/api/admin/orders/query-config.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -11,6 +11,7 @@ export const defaultAdminOrderFields = [",
+            "oldStart": 11,
+            "newStart": 11,
+            "lines": [
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:11",
+                "type": "context",
+                "oldLine": 11,
+                "newLine": 11,
+                "content": "  \"total\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:12",
+                "type": "context",
+                "oldLine": 12,
+                "newLine": 12,
+                "content": "  \"metadata\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:13",
+                "type": "context",
+                "oldLine": 13,
+                "newLine": 13,
+                "content": "  \"locale\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:14",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 14,
+                "content": "  \"tags\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:15",
+                "type": "context",
+                "oldLine": 14,
+                "newLine": 15,
+                "content": "  \"created_at\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:16",
+                "type": "context",
+                "oldLine": 15,
+                "newLine": 16,
+                "content": "  \"updated_at\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:17",
+                "type": "context",
+                "oldLine": 16,
+                "newLine": 17,
+                "content": "]"
+              }
+            ]
+          },
+          {
+            "header": "@@ -32,6 +33,7 @@ export const defaultAdminRetrieveOrderFields = [",
+            "oldStart": 32,
+            "newStart": 33,
+            "lines": [
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:33",
+                "type": "context",
+                "oldLine": 32,
+                "newLine": 33,
+                "content": "  \"original_item_tax_total\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:34",
+                "type": "context",
+                "oldLine": 33,
+                "newLine": 34,
+                "content": "  \"shipping_total\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:35",
+                "type": "context",
+                "oldLine": 34,
+                "newLine": 35,
+                "content": "  \"shipping_subtotal\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:36",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 36,
+                "content": "  \"tags\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:37",
+                "type": "context",
+                "oldLine": 35,
+                "newLine": 37,
+                "content": "  \"shipping_tax_total\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:38",
+                "type": "context",
+                "oldLine": 36,
+                "newLine": 38,
+                "content": "  \"original_shipping_tax_total\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:39",
+                "type": "context",
+                "oldLine": 37,
+                "newLine": 39,
+                "content": "  \"original_shipping_subtotal\","
+              }
+            ]
+          },
+          {
+            "header": "@@ -104,6 +106,7 @@ export const defaultAdminExportOrderFields = [",
+            "oldStart": 104,
+            "newStart": 106,
+            "lines": [
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:106",
+                "type": "context",
+                "oldLine": 104,
+                "newLine": 106,
+                "content": "  \"currency_code\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:107",
+                "type": "context",
+                "oldLine": 105,
+                "newLine": 107,
+                "content": "  \"region_id\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:108",
+                "type": "context",
+                "oldLine": 106,
+                "newLine": 108,
+                "content": "  \"subtotal\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:109",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 109,
+                "content": "  \"tags\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:110",
+                "type": "context",
+                "oldLine": 107,
+                "newLine": 110,
+                "content": "  \"tax_total\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:111",
+                "type": "context",
+                "oldLine": 108,
+                "newLine": 111,
+                "content": "  \"shipping_total\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/query-config.ts:112",
+                "type": "context",
+                "oldLine": 109,
+                "newLine": 112,
+                "content": "  \"discount_total\","
+              }
+            ]
+          }
+        ],
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "oldPath": "packages/medusa/src/api/admin/orders/validators.ts",
+        "newPath": "packages/medusa/src/api/admin/orders/validators.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -128,6 +128,47 @@ export const AdminTransferOrder = z.object({",
+            "oldStart": 128,
+            "newStart": 128,
+            "lines": [
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:128",
+                "type": "context",
+                "oldLine": 128,
+                "newLine": 128,
+                "content": "  update_order_email: z.boolean().optional(),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:129",
+                "type": "context",
+                "oldLine": 129,
+                "newLine": 129,
+                "content": "})"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:130",
+                "type": "context",
+                "oldLine": 130,
+                "newLine": 130,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:131",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 131,
+                "content": "const OrderTag = z"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:132",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 132,
+                "content": "  .string()"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:133",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 133,
+                "content": "  .trim()"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:134",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 134,
+                "content": "  .min(1)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:135",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 135,
+                "content": "  .max(40)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:136",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 136,
+                "content": "  .regex(/^[a-zA-Z0-9 _.-]+$/)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:137",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 137,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:138",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 138,
+                "content": "const OrderTagArray = z.array(OrderTag).max(50)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:139",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 139,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:140",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 140,
+                "content": "export type AdminOrderTagsBodyType = z.infer<typeof AdminOrderTagsBody>"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:141",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 141,
+                "content": "export const AdminOrderTagsBody = z.object({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:142",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 142,
+                "content": "  tags: OrderTagArray,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:143",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 143,
+                "content": "  mode: z.enum([\"append\", \"replace\"]).default(\"append\"),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:144",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 144,
+                "content": "})"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:145",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 145,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:146",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 146,
+                "content": "export type AdminDeleteOrderTagParamsType = z.infer<"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:147",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 147,
+                "content": "  typeof AdminDeleteOrderTagParams"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:148",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 148,
+                "content": ">"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:149",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 149,
+                "content": "export const AdminDeleteOrderTagParams = z.object({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:150",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 150,
+                "content": "  tag: OrderTag,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:151",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 151,
+                "content": "})"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:152",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 152,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:153",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 153,
+                "content": "export const AdminOrderTagsQuery = z.object({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:154",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 154,
+                "content": "  fields: z.string().optional(),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:155",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 155,
+                "content": "})"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:156",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 156,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:157",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 157,
+                "content": "export type AdminOrderTagsResponse = {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:158",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 158,
+                "content": "  order: {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:159",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 159,
+                "content": "    id: string"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:160",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 160,
+                "content": "    tags: string[]"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:161",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 161,
+                "content": "    metadata?: Record<string, unknown> | null"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:162",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 162,
+                "content": "  }"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:163",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 163,
+                "content": "}"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:164",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 164,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:165",
+                "type": "context",
+                "oldLine": 131,
+                "newLine": 165,
+                "content": "export type AdminUpdateOrderType = z.infer<typeof AdminUpdateOrder>"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:166",
+                "type": "context",
+                "oldLine": 132,
+                "newLine": 166,
+                "content": "export const AdminUpdateOrder = z.object({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:167",
+                "type": "context",
+                "oldLine": 133,
+                "newLine": 167,
+                "content": "  email: z.string().optional(),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:168",
+                "type": "context",
+                "oldLine": 134,
+                "newLine": 168,
+                "content": "  shipping_address: AddressPayload.optional(),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:169",
+                "type": "context",
+                "oldLine": 135,
+                "newLine": 169,
+                "content": "  billing_address: AddressPayload.optional(),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:170",
+                "type": "context",
+                "oldLine": 136,
+                "newLine": 170,
+                "content": "  locale: z.string().nullish(),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:171",
+                "type": "context",
+                "oldLine": 137,
+                "newLine": 171,
+                "content": "  metadata: z.record(z.string(), z.unknown()).nullish(),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:172",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 172,
+                "content": "  tags: OrderTagArray.nullish(),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/validators.ts:173",
+                "type": "context",
+                "oldLine": 138,
+                "newLine": 173,
+                "content": "})"
+              }
+            ]
+          }
+        ],
+        "additions": 35,
+        "deletions": 0
+      },
+      {
+        "oldPath": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts",
+        "newPath": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -0,0 +1,113 @@",
+            "oldStart": 0,
+            "newStart": 1,
+            "lines": [
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:1",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1,
+                "content": "export type OrderTagOperation = \"append\" | \"replace\""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:2",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 2,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:3",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 3,
+                "content": "export type OrderWithTags = {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:4",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 4,
+                "content": "  id: string"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:5",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 5,
+                "content": "  tags?: string[] | null"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:6",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 6,
+                "content": "  metadata?: Record<string, unknown> | null"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:7",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 7,
+                "content": "}"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:8",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 8,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:9",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 9,
+                "content": "export type OrderTagAuditSnapshot = {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:10",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 10,
+                "content": "  before: string[]"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:11",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 11,
+                "content": "  after: string[]"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:12",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 12,
+                "content": "  changed: string[]"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:13",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 13,
+                "content": "}"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:14",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 14,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:15",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 15,
+                "content": "export const normalizeOrderTag = (tag: string): string => {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:16",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 16,
+                "content": "  return tag.trim()"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:17",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 17,
+                "content": "}"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:18",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 18,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:19",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 19,
+                "content": "export const normalizeOrderTags = (tags: string[]): string[] => {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:20",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 20,
+                "content": "  const seen = new Set<string>()"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:21",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 21,
+                "content": "  const result: string[] = []"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:22",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 22,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:23",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 23,
+                "content": "  for (const raw of tags) {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:24",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 24,
+                "content": "    const tag = normalizeOrderTag(raw)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:25",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 25,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:26",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 26,
+                "content": "    if (!tag) {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:27",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 27,
+                "content": "      continue"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:28",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 28,
+                "content": "    }"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:29",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 29,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:30",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 30,
+                "content": "    if (seen.has(tag)) {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:31",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 31,
+                "content": "      continue"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:32",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 32,
+                "content": "    }"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:33",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 33,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:34",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 34,
+                "content": "    seen.add(tag)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:35",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 35,
+                "content": "    result.push(tag)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:36",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 36,
+                "content": "  }"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:37",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 37,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:38",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 38,
+                "content": "  return result.slice(0, 50)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:39",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 39,
+                "content": "}"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:40",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 40,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:41",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 41,
+                "content": "export const getExistingOrderTags = (order: OrderWithTags): string[] => {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:42",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 42,
+                "content": "  if (Array.isArray(order.tags)) {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:43",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 43,
+                "content": "    return normalizeOrderTags(order.tags)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:44",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 44,
+                "content": "  }"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:45",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 45,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:46",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 46,
+                "content": "  if (Array.isArray(order.metadata?.tags)) {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:47",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 47,
+                "content": "    return normalizeOrderTags(order.metadata.tags as string[])"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:48",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 48,
+                "content": "  }"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:49",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 49,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:50",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 50,
+                "content": "  if (Array.isArray(order.metadata?.internal_tags)) {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:51",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 51,
+                "content": "    return normalizeOrderTags(order.metadata.internal_tags as string[])"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:52",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 52,
+                "content": "  }"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:53",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 53,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:54",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 54,
+                "content": "  return []"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:55",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 55,
+                "content": "}"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:56",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 56,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:57",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 57,
+                "content": "export const applyOrderTagOperation = ({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:58",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 58,
+                "content": "  existing,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:59",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 59,
+                "content": "  incoming,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:60",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 60,
+                "content": "  mode,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:61",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 61,
+                "content": "}: {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:62",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 62,
+                "content": "  existing: string[]"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:63",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 63,
+                "content": "  incoming: string[]"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:64",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 64,
+                "content": "  mode: OrderTagOperation"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:65",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 65,
+                "content": "}): string[] => {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:66",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 66,
+                "content": "  const normalizedIncoming = normalizeOrderTags(incoming)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:67",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 67,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:68",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 68,
+                "content": "  if (mode === \"replace\") {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:69",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 69,
+                "content": "    return normalizedIncoming"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:70",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 70,
+                "content": "  }"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:71",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 71,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:72",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 72,
+                "content": "  return normalizeOrderTags([...existing, ...normalizedIncoming])"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:73",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 73,
+                "content": "}"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:74",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 74,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:75",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 75,
+                "content": "export const removeOrderTag = ({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:76",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 76,
+                "content": "  existing,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:77",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 77,
+                "content": "  tag,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:78",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 78,
+                "content": "}: {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:79",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 79,
+                "content": "  existing: string[]"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:80",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 80,
+                "content": "  tag: string"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:81",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 81,
+                "content": "}): string[] => {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:82",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 82,
+                "content": "  const normalized = normalizeOrderTag(tag)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:83",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 83,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:84",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 84,
+                "content": "  return existing.filter((existingTag) => existingTag !== normalized)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:85",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 85,
+                "content": "}"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:86",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 86,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:87",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 87,
+                "content": "export const getOrderTagAuditSnapshot = ({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:88",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 88,
+                "content": "  before,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:89",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 89,
+                "content": "  after,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:90",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 90,
+                "content": "}: {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:91",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 91,
+                "content": "  before: string[]"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:92",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 92,
+                "content": "  after: string[]"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:93",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 93,
+                "content": "}): OrderTagAuditSnapshot => {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:94",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 94,
+                "content": "  const beforeSet = new Set(before)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:95",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 95,
+                "content": "  const afterSet = new Set(after)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:96",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 96,
+                "content": "  const changed = ["
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:97",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 97,
+                "content": "    ...after.filter((tag) => !beforeSet.has(tag)),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:98",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 98,
+                "content": "    ...before.filter((tag) => !afterSet.has(tag)),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:99",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 99,
+                "content": "  ]"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:100",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 100,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:101",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 101,
+                "content": "  return {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:102",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 102,
+                "content": "    before,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:103",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 103,
+                "content": "    after,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:104",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 104,
+                "content": "    changed,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:105",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 105,
+                "content": "  }"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:106",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 106,
+                "content": "}"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:107",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 107,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:108",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 108,
+                "content": "export const mergeOrderTagMetadata = ({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:109",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 109,
+                "content": "  metadata,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:110",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 110,
+                "content": "  tags,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:111",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 111,
+                "content": "  actorId,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:112",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 112,
+                "content": "}: {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:113",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 113,
+                "content": "  metadata?: Record<string, unknown> | null"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:114",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 114,
+                "content": "  tags: string[]"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:115",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 115,
+                "content": "  actorId?: string"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:116",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 116,
+                "content": "}) => {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:117",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 117,
+                "content": "  return {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:118",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 118,
+                "content": "    ...(metadata ?? {}),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:119",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 119,
+                "content": "    internal_tags: tags,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:120",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 120,
+                "content": "    internal_tags_updated_by: actorId,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:121",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 121,
+                "content": "    internal_tags_updated_at: new Date().toISOString(),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:122",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 122,
+                "content": "  }"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:123",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 123,
+                "content": "}"
+              }
+            ]
+          }
+        ],
+        "additions": 123,
+        "deletions": 0
+      },
+      {
+        "oldPath": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts",
+        "newPath": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -0,0 +1,184 @@",
+            "oldStart": 0,
+            "newStart": 1,
+            "lines": [
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:1",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1,
+                "content": "import type { IOrderModuleService } from \"@medusajs/framework/types\""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:2",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 2,
+                "content": "import {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:3",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 3,
+                "content": "  AuthenticatedMedusaRequest,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:4",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 4,
+                "content": "  MedusaResponse,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:5",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 5,
+                "content": "} from \"@medusajs/framework/http\""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:6",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 6,
+                "content": "import {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:7",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 7,
+                "content": "  ContainerRegistrationKeys,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:8",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 8,
+                "content": "  MedusaError,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:9",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 9,
+                "content": "  Modules,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:10",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 10,
+                "content": "} from \"@medusajs/framework/utils\""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:11",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 11,
+                "content": "import { AdminOrder } from \"@medusajs/framework/types\""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:12",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 12,
+                "content": "import {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:13",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 13,
+                "content": "  AdminDeleteOrderTagParamsType,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:14",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 14,
+                "content": "  AdminOrderTagsBodyType,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:15",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 15,
+                "content": "} from \"../../../validators\""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:16",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 16,
+                "content": "import {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:17",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 17,
+                "content": "  applyOrderTagOperation,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:18",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 18,
+                "content": "  getExistingOrderTags,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:19",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 19,
+                "content": "  getOrderTagAuditSnapshot,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:20",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 20,
+                "content": "  mergeOrderTagMetadata,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:21",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 21,
+                "content": "  removeOrderTag,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:22",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 22,
+                "content": "} from \"./utils\""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:23",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 23,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:24",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 24,
+                "content": "const ORDER_TAG_FIELDS = [\"id\", \"tags\", \"metadata\"] as const"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:25",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 25,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:26",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 26,
+                "content": "const readOrderForTags = async ("
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:27",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 27,
+                "content": "  orderModuleService: IOrderModuleService,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:28",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 28,
+                "content": "  orderId: string"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:29",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 29,
+                "content": ") => {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:30",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 30,
+                "content": "  const [order] = await orderModuleService.listOrders("
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:31",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 31,
+                "content": "    { id: orderId },"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:32",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 32,
+                "content": "    {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:33",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 33,
+                "content": "      select: [...ORDER_TAG_FIELDS],"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:34",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 34,
+                "content": "    }"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:35",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 35,
+                "content": "  )"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:36",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 36,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:37",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 37,
+                "content": "  if (!order) {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:38",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 38,
+                "content": "    throw new MedusaError("
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:39",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 39,
+                "content": "      MedusaError.Types.NOT_FOUND,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:40",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 40,
+                "content": "      `Order ${orderId} was not found`"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:41",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 41,
+                "content": "    )"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:42",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 42,
+                "content": "  }"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:43",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 43,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:44",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 44,
+                "content": "  return order"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:45",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 45,
+                "content": "}"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:46",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 46,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:47",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 47,
+                "content": "export const POST = async ("
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:48",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 48,
+                "content": "  req: AuthenticatedMedusaRequest<"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:49",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 49,
+                "content": "    AdminOrderTagsBodyType,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:50",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 50,
+                "content": "    {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:51",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 51,
+                "content": "      id: string"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:52",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 52,
+                "content": "    }"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:53",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 53,
+                "content": "  >,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:54",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 54,
+                "content": "  res: MedusaResponse"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:55",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 55,
+                "content": ") => {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:56",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 56,
+                "content": "  const orderModuleService = req.scope.resolve<IOrderModuleService>("
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:57",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 57,
+                "content": "    Modules.ORDER"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:58",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 58,
+                "content": "  )"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:59",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 59,
+                "content": "  const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:60",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 60,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:61",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 61,
+                "content": "  const order = await readOrderForTags(orderModuleService, req.params.id)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:62",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 62,
+                "content": "  const existingTags = getExistingOrderTags(order)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:63",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 63,
+                "content": "  const nextTags = applyOrderTagOperation({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:64",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 64,
+                "content": "    existing: existingTags,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:65",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 65,
+                "content": "    incoming: req.validatedBody.tags,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:66",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 66,
+                "content": "    mode: req.validatedBody.mode,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:67",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 67,
+                "content": "  })"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:68",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 68,
+                "content": "  const audit = getOrderTagAuditSnapshot({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:69",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 69,
+                "content": "    before: existingTags,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:70",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 70,
+                "content": "    after: nextTags,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:71",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 71,
+                "content": "  })"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:72",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 72,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:73",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 73,
+                "content": "  await orderModuleService.updateOrders(req.params.id, {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:74",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 74,
+                "content": "    id: req.params.id,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:75",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 75,
+                "content": "    tags: nextTags,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:76",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 76,
+                "content": "    metadata: mergeOrderTagMetadata({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:77",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 77,
+                "content": "      metadata: order.metadata,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:78",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 78,
+                "content": "      tags: nextTags,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:79",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 79,
+                "content": "      actorId: req.auth_context.actor_id,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:80",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 80,
+                "content": "    }),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:81",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 81,
+                "content": "  })"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:82",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 82,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:83",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 83,
+                "content": "  req.scope"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:84",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 84,
+                "content": "    .resolve(\"logger\")"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:85",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 85,
+                "content": "    .info("
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:86",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 86,
+                "content": "      `Updated order tags for ${req.params.id}: ${audit.changed.join(\",\")}`"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:87",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 87,
+                "content": "    )"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:88",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 88,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:89",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 89,
+                "content": "  const result = await query.graph({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:90",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 90,
+                "content": "    entity: \"order\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:91",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 91,
+                "content": "    filters: {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:92",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 92,
+                "content": "      id: req.params.id,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:93",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 93,
+                "content": "    },"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:94",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 94,
+                "content": "    fields: req.queryConfig.fields,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:95",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 95,
+                "content": "  })"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:96",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 96,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:97",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 97,
+                "content": "  res.status(200).json({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:98",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 98,
+                "content": "    order: result.data[0] as AdminOrder,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:99",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 99,
+                "content": "  })"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:100",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 100,
+                "content": "}"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:101",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 101,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:102",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 102,
+                "content": "export const DELETE = async ("
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:103",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 103,
+                "content": "  req: AuthenticatedMedusaRequest<"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:104",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 104,
+                "content": "    never,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:105",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 105,
+                "content": "    {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:106",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 106,
+                "content": "      id: string"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:107",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 107,
+                "content": "      tag: AdminDeleteOrderTagParamsType[\"tag\"]"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:108",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 108,
+                "content": "    }"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:109",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 109,
+                "content": "  >,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:110",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 110,
+                "content": "  res: MedusaResponse"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:111",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 111,
+                "content": ") => {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:112",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 112,
+                "content": "  const orderModuleService = req.scope.resolve<IOrderModuleService>("
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:113",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 113,
+                "content": "    Modules.ORDER"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:114",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 114,
+                "content": "  )"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:115",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 115,
+                "content": "  const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:116",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 116,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:117",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 117,
+                "content": "  const order = await readOrderForTags(orderModuleService, req.params.id)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:118",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 118,
+                "content": "  const existingTags = getExistingOrderTags(order)"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:119",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 119,
+                "content": "  const nextTags = removeOrderTag({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:120",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 120,
+                "content": "    existing: existingTags,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:121",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 121,
+                "content": "    tag: req.params.tag,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:122",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 122,
+                "content": "  })"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:123",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 123,
+                "content": "  const audit = getOrderTagAuditSnapshot({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:124",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 124,
+                "content": "    before: existingTags,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:125",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 125,
+                "content": "    after: nextTags,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:126",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 126,
+                "content": "  })"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:127",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 127,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:128",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 128,
+                "content": "  await orderModuleService.updateOrders(req.params.id, {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:129",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 129,
+                "content": "    id: req.params.id,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:130",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 130,
+                "content": "    tags: nextTags,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:131",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 131,
+                "content": "    metadata: mergeOrderTagMetadata({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:132",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 132,
+                "content": "      metadata: order.metadata,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:133",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 133,
+                "content": "      tags: nextTags,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:134",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 134,
+                "content": "      actorId: req.auth_context.actor_id,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:135",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 135,
+                "content": "    }),"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:136",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 136,
+                "content": "  })"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:137",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 137,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:138",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 138,
+                "content": "  req.scope"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:139",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 139,
+                "content": "    .resolve(\"logger\")"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:140",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 140,
+                "content": "    .info("
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:141",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 141,
+                "content": "      `Removed order tag for ${req.params.id}: ${audit.changed.join(\",\")}`"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:142",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 142,
+                "content": "    )"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:143",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 143,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:144",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 144,
+                "content": "  const result = await query.graph({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:145",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 145,
+                "content": "    entity: \"order\","
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:146",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 146,
+                "content": "    filters: {"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:147",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 147,
+                "content": "      id: req.params.id,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:148",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 148,
+                "content": "    },"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:149",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 149,
+                "content": "    fields: req.queryConfig.fields,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:150",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 150,
+                "content": "  })"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:151",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 151,
+                "content": ""
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:152",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 152,
+                "content": "  res.status(200).json({"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:153",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 153,
+                "content": "    order: result.data[0] as AdminOrder,"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:154",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 154,
+                "content": "  })"
+              },
+              {
+                "id": "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:155",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 155,
+                "content": "}"
+              }
+            ]
+          }
+        ],
+        "additions": 155,
+        "deletions": 0
+      },
+      {
+        "oldPath": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts",
+        "newPath": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -0,0 +1,170 @@",
+            "oldStart": 0,
+            "newStart": 1,
+            "lines": [
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:1",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1,
+                "content": "import {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:2",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 2,
+                "content": "  adminHeaders,"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:3",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 3,
+                "content": "  createAdminUser,"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:4",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 4,
+                "content": "} from \"../../../helpers/create-admin-user\""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:5",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 5,
+                "content": "import { medusaIntegrationTestRunner } from \"../../../medusa-test-runner\""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:6",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 6,
+                "content": "import { createOrderSeeder } from \"../../helpers/order\""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:7",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 7,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:8",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 8,
+                "content": "medusaIntegrationTestRunner({"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:9",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 9,
+                "content": "  testSuite: ({ api, getContainer }) => {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:10",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 10,
+                "content": "    describe(\"Admin order tags\", () => {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:11",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 11,
+                "content": "      let orderId: string"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:12",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 12,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:13",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 13,
+                "content": "      beforeEach(async () => {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:14",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 14,
+                "content": "        await createAdminUser(getContainer())"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:15",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 15,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:16",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 16,
+                "content": "        const seeder = createOrderSeeder({ api, getContainer })"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:17",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 17,
+                "content": "        const order = await seeder.create({"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:18",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 18,
+                "content": "          email: \"order-tags@example.com\","
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:19",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 19,
+                "content": "          currency_code: \"usd\","
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:20",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 20,
+                "content": "        })"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:21",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 21,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:22",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 22,
+                "content": "        orderId = order.id"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:23",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 23,
+                "content": "      })"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:24",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 24,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:25",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 25,
+                "content": "      it(\"appends tags to an order\", async () => {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:26",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 26,
+                "content": "        const response = await api.post("
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:27",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 27,
+                "content": "          `/admin/orders/${orderId}/tags`,"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:28",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 28,
+                "content": "          {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:29",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 29,
+                "content": "            tags: [\"vip\", \"warehouse-hold\"],"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:30",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 30,
+                "content": "          },"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:31",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 31,
+                "content": "          adminHeaders"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:32",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 32,
+                "content": "        )"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:33",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 33,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:34",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 34,
+                "content": "        expect(response.status).toBe(200)"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:35",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 35,
+                "content": "        expect(response.data.order.tags).toEqual([\"vip\", \"warehouse-hold\"])"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:36",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 36,
+                "content": "      })"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:37",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 37,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:38",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 38,
+                "content": "      it(\"deduplicates exact repeated tags\", async () => {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:39",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 39,
+                "content": "        const response = await api.post("
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:40",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 40,
+                "content": "          `/admin/orders/${orderId}/tags`,"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:41",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 41,
+                "content": "          {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:42",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 42,
+                "content": "            tags: [\"vip\", \"vip\"],"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:43",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 43,
+                "content": "          },"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:44",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 44,
+                "content": "          adminHeaders"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:45",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 45,
+                "content": "        )"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:46",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 46,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:47",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 47,
+                "content": "        expect(response.status).toBe(200)"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:48",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 48,
+                "content": "        expect(response.data.order.tags).toEqual([\"vip\"])"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:49",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 49,
+                "content": "      })"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:50",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 50,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:51",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 51,
+                "content": "      it(\"replaces tags when requested\", async () => {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:52",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 52,
+                "content": "        await api.post("
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:53",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 53,
+                "content": "          `/admin/orders/${orderId}/tags`,"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:54",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 54,
+                "content": "          {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:55",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 55,
+                "content": "            tags: [\"vip\", \"fraud-review\"],"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:56",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 56,
+                "content": "          },"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:57",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 57,
+                "content": "          adminHeaders"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:58",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 58,
+                "content": "        )"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:59",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 59,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:60",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 60,
+                "content": "        const response = await api.post("
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:61",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 61,
+                "content": "          `/admin/orders/${orderId}/tags`,"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:62",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 62,
+                "content": "          {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:63",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 63,
+                "content": "            mode: \"replace\","
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:64",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 64,
+                "content": "            tags: [\"priority\"],"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:65",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 65,
+                "content": "          },"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:66",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 66,
+                "content": "          adminHeaders"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:67",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 67,
+                "content": "        )"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:68",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 68,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:69",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 69,
+                "content": "        expect(response.status).toBe(200)"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:70",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 70,
+                "content": "        expect(response.data.order.tags).toEqual([\"priority\"])"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:71",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 71,
+                "content": "      })"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:72",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 72,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:73",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 73,
+                "content": "      it(\"removes a tag\", async () => {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:74",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 74,
+                "content": "        await api.post("
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:75",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 75,
+                "content": "          `/admin/orders/${orderId}/tags`,"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:76",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 76,
+                "content": "          {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:77",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 77,
+                "content": "            tags: [\"vip\", \"fraud-review\"],"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:78",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 78,
+                "content": "          },"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:79",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 79,
+                "content": "          adminHeaders"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:80",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 80,
+                "content": "        )"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:81",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 81,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:82",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 82,
+                "content": "        const response = await api.delete("
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:83",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 83,
+                "content": "          `/admin/orders/${orderId}/tags/vip`,"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:84",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 84,
+                "content": "          adminHeaders"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:85",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 85,
+                "content": "        )"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:86",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 86,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:87",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 87,
+                "content": "        expect(response.status).toBe(200)"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:88",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 88,
+                "content": "        expect(response.data.order.tags).toEqual([\"fraud-review\"])"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:89",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 89,
+                "content": "      })"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:90",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 90,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:91",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 91,
+                "content": "      it(\"returns tags in the order detail response\", async () => {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:92",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 92,
+                "content": "        await api.post("
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:93",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 93,
+                "content": "          `/admin/orders/${orderId}/tags`,"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:94",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 94,
+                "content": "          {"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:95",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 95,
+                "content": "            tags: [\"vip\"],"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:96",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 96,
+                "content": "          },"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:97",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 97,
+                "content": "          adminHeaders"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:98",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 98,
+                "content": "        )"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:99",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 99,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:100",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 100,
+                "content": "        const response = await api.get("
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:101",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 101,
+                "content": "          `/admin/orders/${orderId}`,"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:102",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 102,
+                "content": "          adminHeaders"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:103",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 103,
+                "content": "        )"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:104",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 104,
+                "content": ""
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:105",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 105,
+                "content": "        expect(response.status).toBe(200)"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:106",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 106,
+                "content": "        expect(response.data.order.tags).toEqual([\"vip\"])"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:107",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 107,
+                "content": "      })"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:108",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 108,
+                "content": "    })"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:109",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 109,
+                "content": "  },"
+              },
+              {
+                "id": "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:110",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 110,
+                "content": "})"
+              }
+            ]
+          }
+        ],
+        "additions": 110,
+        "deletions": 0
+      }
+    ],
+    "fileCount": 9,
+    "additions": 482,
+    "deletions": 0
+  },
+  "flaws": [
+    {
+      "id": "flaw-1",
+      "number": 1,
+      "title": "Tags Are Modeled As Free-Form Order Row State",
+      "prompt": "Is `tags: string[]` on the order row a strong enough domain model for operational tags?",
+      "expectedIdentification": "- `identify`: The PR treats tags as a free-form JSON list owned by the order row and mirrors them into metadata. There is no tag definition model, normalized value, scoped uniqueness rule, ownership boundary, assignment record, actor/timestamp per assignment, rename/delete semantics, or lifecycle for who can create a tag versus apply one. The helper only trims strings and deduplicates exact matches, so `VIP`, `vip`, and `vip ` can become different operational states.\n- `impact`: Operations data will drift quickly. Reporting and filtering become unreliable, support cannot answer who applied or removed a tag, product cannot add colors/categories/permissions later without a migration, and downstream automation may disagree about which tags mean the same thing. A \"small internal label\" becomes a core operational taxonomy hidden inside arbitrary order JSON.\n- `fix_direction`: Model tags as a small domain concept. Use an `order_tag` table/module with normalized unique values and optional display metadata, plus an `order_tag_assignment` table with `order_id`, `tag_id`, `created_by`, `removed_by` or soft-delete/history fields, and timestamps. Expose order tags through a service boundary so creation, assignment, rename, removal, permissions, and reporting share one invariant.",
+      "expectedImpact": "",
+      "expectedFix": "",
+      "goldenAnswer": "- `identify`: The PR treats tags as a free-form JSON list owned by the order row and mirrors them into metadata. There is no tag definition model, normalized value, scoped uniqueness rule, ownership boundary, assignment record, actor/timestamp per assignment, rename/delete semantics, or lifecycle for who can create a tag versus apply one. The helper only trims strings and deduplicates exact matches, so `VIP`, `vip`, and `vip ` can become different operational states.\n- `impact`: Operations data will drift quickly. Reporting and filtering become unreliable, support cannot answer who applied or removed a tag, product cannot add colors/categories/permissions later without a migration, and downstream automation may disagree about which tags mean the same thing. A \"small internal label\" becomes a core operational taxonomy hidden inside arbitrary order JSON.\n- `fix_direction`: Model tags as a small domain concept. Use an `order_tag` table/module with normalized unique values and optional display metadata, plus an `order_tag_assignment` table with `order_id`, `tag_id`, `created_by`, `removed_by` or soft-delete/history fields, and timestamps. Expose order tags through a service boundary so creation, assignment, rename, removal, permissions, and reporting share one invariant.",
+      "hints": [
+        "Ask whether the product is storing a label or creating a reusable operational taxonomy.",
+        "Compare a JSON string list with the questions support and operations will ask later: who, when, why, rename, delete, report.",
+        "The suspicious places are the new tags order column and the helper that only trims strings before saving them."
+      ]
+    },
+    {
+      "id": "flaw-2",
+      "number": 2,
+      "title": "Tag Mutations Bypass The Order Workflow And Audit/Event Contract",
+      "prompt": "Do tag changes behave like other product-visible order state transitions in Medusa?",
+      "expectedIdentification": "- `identify`: The new tag endpoints read and write through `orderModuleService.updateOrders` directly from the HTTP route. They do not run a workflow step, do not use `updateOrderWorkflow`, do not register an order change with `created_by`/`confirmed_by`, do not emit `OrderWorkflowEvents.UPDATED` after workflow success, and do not get workflow compensation semantics. The tests only assert the response shape, not audit records, events, or subscriber-visible behavior.\n- `impact`: Admin views show the changed tags, but systems that depend on order changes or order-updated events can miss the transition. Audit trails are incomplete, retries can partially update metadata without a domain event, cache/search/indexing subscribers may stay stale, and future order invariants can be bypassed because the route became its own mini domain service.\n- `fix_direction`: Put tag application/removal behind an order-tag workflow or extend the order update workflow with an explicit tag step. The workflow should validate the order, perform assignment changes through the tag service, register an order change/audit entry with actor context, emit a stable event such as `order.tags_updated` or `OrderWorkflowEvents.UPDATED`, and return the re-queried order.",
+      "expectedImpact": "",
+      "expectedFix": "",
+      "goldenAnswer": "- `identify`: The new tag endpoints read and write through `orderModuleService.updateOrders` directly from the HTTP route. They do not run a workflow step, do not use `updateOrderWorkflow`, do not register an order change with `created_by`/`confirmed_by`, do not emit `OrderWorkflowEvents.UPDATED` after workflow success, and do not get workflow compensation semantics. The tests only assert the response shape, not audit records, events, or subscriber-visible behavior.\n- `impact`: Admin views show the changed tags, but systems that depend on order changes or order-updated events can miss the transition. Audit trails are incomplete, retries can partially update metadata without a domain event, cache/search/indexing subscribers may stay stale, and future order invariants can be bypassed because the route became its own mini domain service.\n- `fix_direction`: Put tag application/removal behind an order-tag workflow or extend the order update workflow with an explicit tag step. The workflow should validate the order, perform assignment changes through the tag service, register an order change/audit entry with actor context, emit a stable event such as `order.tags_updated` or `OrderWorkflowEvents.UPDATED`, and return the re-queried order.",
+      "hints": [
+        "Start from how the existing admin order update endpoint changes an order.",
+        "Look for order changes, workflow steps, and events, not only for a successful database write.",
+        "The key line is the route-level orderModuleService.updateOrders(...) call; compare it to updateOrderWorkflow(req.scope).run(...)."
+      ]
+    }
+  ],
+  "debrief": {
+    "raw": "### Correctness Verdict\n\nFor flaw 1, a correct answer must identify the modeling problem, not merely say \"add validation.\" The issue is that operational tags need definitions, assignments, normalization, ownership, and history; a JSON array on `order` cannot carry that contract.\n\nFor flaw 2, a correct answer must identify the workflow/audit/event bypass. Answers that only mention \"the route has business logic\" are close, but complete answers connect the direct write to missing order changes, actor history, event emission, retry behavior, and subscriber consistency.\n\n### Product-Level Change\n\nThe PR tries to let operations teams classify orders for internal handling. That is useful product behavior: tags can drive support triage, fraud review, fulfillment holds, and priority handling. Because those labels affect how humans and automations treat an order, they are not throwaway UI state.\n\n### Changed Contracts\n\n- Database contract: orders now have a `tags` JSON field and a GIN index.\n- API contract: admin order detail/list/export responses include `tags`.\n- Mutation contract: new admin endpoints can append, replace, and remove tags.\n- Audit contract: tag changes should be attributable to an actor and visible as order history.\n- Event contract: subscribers need a reliable signal when order classification changes.\n- Domain contract: the system now needs to define what a valid tag is, who owns tag creation, and how tags are renamed or removed.\n\n### Failure Modes\n\nAn operations team uses `fraud-review` for automation. One admin enters `Fraud Review`, another enters `fraud-review`, and a third enters `fraud_review`. The UI may show all three, while reports and jobs miss some orders because the code only deduplicates exact strings.\n\nA warehouse hold is removed through `DELETE /admin/orders/:id/tags/warehouse-hold`. The order response changes, but no order change record or workflow event is emitted. A subscriber that syncs order state to the warehouse system never sees the removal, so the warehouse continues holding the package.\n\n### Reviewer Thought Process\n\nA strong reviewer first classifies the change: this is not just response decoration. It introduces new operational state on orders. That immediately raises modeling questions: whether tags are reusable entities, whether they need normalization, whether assignments need history, and whether future reporting can rely on them.\n\nThe second move is to follow the mutation path. In Medusa, order updates normally go through workflows that validate, update, register changes, and emit events. A reviewer should compare the new tag route to `updateOrderWorkflow`, then ask what subscribers, audits, and compensating steps will miss.\n\n### Better Implementation Direction\n\nDesign order tags as a small domain surface:\n\n- Create normalized tag definitions scoped to the store or tenant.\n- Store assignments separately from the order row, with actor and timestamp history.\n- Mutate assignments through an order-tag service or workflow step.\n- Emit a stable tag-updated event after workflow success.\n- Register an order change or equivalent audit record with before/after tags.\n- Add tests for normalization, duplicate display names, audit rows, events, and subscriber-visible behavior.",
+    "productLevelChange": "The PR tries to let operations teams classify orders for internal handling. That is useful product behavior: tags can drive support triage, fraud review, fulfillment holds, and priority handling. Because those labels affect how humans and automations treat an order, they are not throwaway UI state.",
+    "changedContracts": "- Database contract: orders now have a `tags` JSON field and a GIN index.",
+    "failureModes": "An operations team uses `fraud-review` for automation. One admin enters `Fraud Review`, another enters `fraud-review`, and a third enters `fraud_review`. The UI may show all three, while reports and jobs miss some orders because the code only deduplicates exact strings.",
+    "reviewerThoughtProcess": "A strong reviewer first classifies the change: this is not just response decoration. It introduces new operational state on orders. That immediately raises modeling questions: whether tags are reusable entities, whether they need normalization, whether assignments need history, and whether future reporting can rely on them.",
+    "betterImplementation": "Design order tags as a small domain surface:"
+  },
+  "verdictRubric": "For flaw 1, a correct answer must identify the modeling problem, not merely say \"add validation.\" The issue is that operational tags need definitions, assignments, normalization, ownership, and history; a JSON array on `order` cannot carry that contract.\n\nFor flaw 2, a correct answer must identify the workflow/audit/event bypass. Answers that only mention \"the route has business logic\" are close, but complete answers connect the direct write to missing order changes, actor history, event emission, retry behavior, and subscriber consistency.\n\n### Product-Level Change\n\nThe PR tries to let operations teams classify orders for internal handling. That is useful product behavior: tags can drive support triage, fraud review, fulfillment holds, and priority handling. Because those labels affect how humans and automations treat an order, they are not throwaway UI state.\n\n### Changed Contracts\n\n- Database contract: orders now have a `tags` JSON field and a GIN index.\n- API contract: admin order detail/list/export responses include `tags`.\n- Mutation contract: new admin endpoints can append, replace, and remove tags.\n- Audit contract: tag changes should be attributable to an actor and visible as order history.\n- Event contract: subscribers need a reliable signal when order classification changes.\n- Domain contract: the system now needs to define what a valid tag is, who owns tag creation, and how tags are renamed or removed.\n\n### Failure Modes\n\nAn operations team uses `fraud-review` for automation. One admin enters `Fraud Review`, another enters `fraud-review`, and a third enters `fraud_review`. The UI may show all three, while reports and jobs miss some orders because the code only deduplicates exact strings.\n\nA warehouse hold is removed through `DELETE /admin/orders/:id/tags/warehouse-hold`. The order response changes, but no order change record or workflow event is emitted. A subscriber that syncs order state to the warehouse system never sees the removal, so the warehouse continues holding the package.\n\n### Reviewer Thought Process\n\nA strong reviewer first classifies the change: this is not just response decoration. It introduces new operational state on orders. That immediately raises modeling questions: whether tags are reusable entities, whether they need normalization, whether assignments need history, and whether future reporting can rely on them.\n\nThe second move is to follow the mutation path. In Medusa, order updates normally go through workflows that validate, update, register changes, and emit events. A reviewer should compare the new tag route to `updateOrderWorkflow`, then ask what subscribers, audits, and compensating steps will miss.\n\n### Better Implementation Direction\n\nDesign order tags as a small domain surface:\n\n- Create normalized tag definitions scoped to the store or tenant.\n- Store assignments separately from the order row, with actor and timestamp history.\n- Mutate assignments through an order-tag service or workflow step.\n- Emit a stable tag-updated event after workflow success.\n- Register an order change or equivalent audit record with before/after tags.\n- Add tests for normalization, duplicate display names, audit rows, events, and subscriber-visible behavior."
+}

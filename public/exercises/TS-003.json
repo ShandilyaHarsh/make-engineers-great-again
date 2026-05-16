@@ -1,0 +1,3874 @@
+{
+  "id": "TS-003",
+  "slug": "TS-003-directus-saved-query-export",
+  "title": "Directus Saved-Query Export For Collections",
+  "sourceFile": "curriculum/exercises/TS-003-directus-saved-query-export.md",
+  "sourceRepo": {
+    "label": "directus/directus",
+    "url": "https://github.com/directus/directus"
+  },
+  "repoArea": "utils export controller, import/export service, items service, query sanitization, permission-aware AST processing",
+  "difficulty": 1,
+  "targetDiffLines": 563,
+  "representedDiffLines": 563,
+  "mode": "synthetic_degraded",
+  "prDescription": "This PR adds saved-query exports.\n\nUsers can save a query for a collection, then export it later without rebuilding the filter in the client. The feature is intended for operational workflows like \"export open support tickets\", \"export pending invoices\", or \"export contacts in a region\". The new endpoint accepts:\n\n- a saved query id,\n- an export format,\n- optional field overrides,\n- optional limit override.\n\nThe endpoint resolves the saved query, applies the stored filter, and returns a CSV/JSON file response directly to the caller.",
+  "existingCodeContext": "The real Directus codebase already has these relevant contracts:\n\n- `api/src/controllers/utils.ts` handles `POST /utils/export/:collection`. It requires a query and format, sanitizes the query with `sanitizeQuery(req.body.query, req.schema, req.accountability)`, and delegates to `ExportService.exportToFile`.\n- `api/src/services/import-export.ts` implements `ExportService.exportToFile`. It creates a service through `getService(collection, { accountability, schema, knex })`, calls `service.readByQuery`, and exports in batches using `EXPORT_BATCH_SIZE`.\n- `api/src/services/items.ts` implements `ItemsService.readByQuery`. It builds the query AST with `getAstFromQuery`, calls `processAst({ action: \"read\", accountability })`, and runs the processed AST. This is where field permissions, row permissions, relations, dynamic variables, and accountability-sensitive rules are enforced.\n- `api/src/utils/sanitize-query.ts` parses filter JSON, fields, sort, aggregate, limit, deep, alias, search, and dynamic permission variables before a query enters the service layer.\n- `api/src/services/import-export.ts` already avoids loading the entire export at once: it counts, pages through batches, appends each batch to a temporary file, and uploads that file through `FilesService`.",
+  "learnerTask": "Review the PR. Identify the two intended flaws. For each flaw:\n\n1. Name the flaw.\n2. Cite the relevant file and line range from the diff.\n3. Explain the production impact.\n4. Suggest the better implementation direction.",
+  "reviewSurface": [
+    "api/src/database/migrations/20260516000100-add-saved-queries.ts",
+    "api/src/services/saved-query-export.ts",
+    "api/src/controllers/utils.ts",
+    "api/src/services/index.ts",
+    "packages/types/src/saved-query-export.ts",
+    "api/src/services/saved-query-export.test.ts"
+  ],
+  "diff": {
+    "raw": "diff --git a/api/src/database/migrations/20260516000100-add-saved-queries.ts b/api/src/database/migrations/20260516000100-add-saved-queries.ts\nnew file mode 100644\nindex 0000000000..6d3202af77\n--- /dev/null\n+++ b/api/src/database/migrations/20260516000100-add-saved-queries.ts\n@@ -0,0 +1,57 @@\n+import type { Knex } from 'knex';\n+\n+export async function up(knex: Knex): Promise<void> {\n+\tawait knex.schema.createTable('directus_saved_queries', (table) => {\n+\t\ttable.uuid('id').primary();\n+\t\ttable.string('collection').notNullable();\n+\t\ttable.string('name').notNullable();\n+\t\ttable.uuid('user_created').nullable();\n+\t\ttable.timestamp('date_created').notNullable().defaultTo(knex.fn.now());\n+\t\ttable.json('query').notNullable();\n+\t\ttable.json('fields').nullable();\n+\t\ttable.string('format').notNullable().defaultTo('csv');\n+\t\ttable.boolean('shared').notNullable().defaultTo(false);\n+\n+\t\ttable.foreign('user_created').references('id').inTable('directus_users').onDelete('SET NULL');\n+\t\ttable.index(['collection']);\n+\t\ttable.index(['user_created']);\n+\t\ttable.index(['shared']);\n+\t});\n+}\n+\n+export async function down(knex: Knex): Promise<void> {\n+\tawait knex.schema.dropTable('directus_saved_queries');\n+}\ndiff --git a/api/src/services/saved-query-export.ts b/api/src/services/saved-query-export.ts\nnew file mode 100644\nindex 0000000000..9fc0ae3251\n--- /dev/null\n+++ b/api/src/services/saved-query-export.ts\n@@ -0,0 +1,274 @@\n+import { createError, ForbiddenError, InvalidPayloadError, ServiceUnavailableError } from '@directus/errors';\n+import type { AbstractServiceOptions, Accountability, ExportFormat, Query, SchemaOverview } from '@directus/types';\n+import { getDateTimeFormatted, parseJSON, toArray } from '@directus/utils';\n+import { Parser as CSVParser, transforms as CSVTransforms } from 'json2csv';\n+import type { Knex } from 'knex';\n+import { omit } from 'lodash-es';\n+import getDatabase from '../database/index.js';\n+\n+const SavedQueryNotFoundError = createError('SAVED_QUERY_NOT_FOUND', 'Saved query does not exist.', 404);\n+\n+type SavedQueryRow = {\n+\tid: string;\n+\tcollection: string;\n+\tname: string;\n+\tuser_created: string | null;\n+\tquery: Record<string, any> | string;\n+\tfields: string[] | string | null;\n+\tformat: ExportFormat;\n+\tshared: boolean;\n+};\n+\n+type ExportSavedQueryOptions = {\n+\tsavedQueryId: string;\n+\tformat?: ExportFormat;\n+\tfields?: string[];\n+\tlimit?: number;\n+};\n+\n+type ExportFileResponse = {\n+\tfilename: string;\n+\ttype: string;\n+\tbody: string;\n+};\n+\n+export class SavedQueryExportService {\n+\tknex: Knex;\n+\taccountability: Accountability | null;\n+\tschema: SchemaOverview;\n+\n+\tconstructor(options: AbstractServiceOptions) {\n+\t\tthis.knex = options.knex || getDatabase();\n+\t\tthis.accountability = options.accountability || null;\n+\t\tthis.schema = options.schema;\n+\t}\n+\n+\tasync exportSavedQuery(options: ExportSavedQueryOptions): Promise<ExportFileResponse> {\n+\t\tconst savedQuery = await this.getSavedQuery(options.savedQueryId);\n+\n+\t\tif (!savedQuery.shared && savedQuery.user_created !== this.accountability?.user) {\n+\t\t\tthrow new ForbiddenError();\n+\t\t}\n+\n+\t\tconst query = this.normalizeStoredQuery(savedQuery, {\n+\t\t\tfields: options.fields,\n+\t\t\tlimit: options.limit,\n+\t\t});\n+\n+\t\tconst rows = await this.readRowsForSavedQuery(savedQuery.collection, query);\n+\t\tconst format = options.format ?? savedQuery.format ?? 'csv';\n+\t\tconst body = this.transformRows(rows, format, query.fields);\n+\t\tconst extension = format === 'csv_utf8' ? 'csv' : format;\n+\n+\t\treturn {\n+\t\t\tfilename: `${savedQuery.collection}-${savedQuery.name}-${getDateTimeFormatted()}.${extension}`,\n+\t\t\ttype: this.getMimeType(format),\n+\t\t\tbody,\n+\t\t};\n+\t}\n+\n+\tprivate async getSavedQuery(id: string): Promise<SavedQueryRow> {\n+\t\tconst savedQuery = await this.knex<SavedQueryRow>('directus_saved_queries').where({ id }).first();\n+\n+\t\tif (!savedQuery) {\n+\t\t\tthrow new SavedQueryNotFoundError();\n+\t\t}\n+\n+\t\treturn savedQuery;\n+\t}\n+\n+\tprivate normalizeStoredQuery(\n+\t\tsavedQuery: SavedQueryRow,\n+\t\toverrides: {\n+\t\t\tfields?: string[];\n+\t\t\tlimit?: number;\n+\t\t}\n+\t): Query {\n+\t\tconst storedQuery =\n+\t\t\ttypeof savedQuery.query === 'string' ? parseJSON(savedQuery.query) : { ...savedQuery.query };\n+\n+\t\tconst storedFields =\n+\t\t\ttypeof savedQuery.fields === 'string'\n+\t\t\t\t? toArray(savedQuery.fields)\n+\t\t\t\t: Array.isArray(savedQuery.fields)\n+\t\t\t\t\t? savedQuery.fields\n+\t\t\t\t\t: undefined;\n+\n+\t\treturn {\n+\t\t\t...storedQuery,\n+\t\t\tfields: overrides.fields ?? storedQuery.fields ?? storedFields ?? ['*'],\n+\t\t\tlimit: overrides.limit ?? storedQuery.limit ?? -1,\n+\t\t};\n+\t}\n+\n+\tprivate async readRowsForSavedQuery(collection: string, query: Query) {\n+\t\tconst fields = this.normalizeFields(query.fields);\n+\t\tconst rowsQuery = this.knex(collection).select(fields);\n+\n+\t\tthis.applyRawFilter(rowsQuery, query.filter);\n+\t\tthis.applySort(rowsQuery, query.sort);\n+\n+\t\tif (typeof query.limit === 'number' && query.limit > 0) {\n+\t\t\trowsQuery.limit(query.limit);\n+\t\t}\n+\n+\t\tif (typeof query.offset === 'number' && query.offset > 0) {\n+\t\t\trowsQuery.offset(query.offset);\n+\t\t}\n+\n+\t\treturn await rowsQuery;\n+\t}\n+\n+\tprivate normalizeFields(fields: Query['fields']) {\n+\t\tif (!fields || fields.length === 0) {\n+\t\t\treturn ['*'];\n+\t\t}\n+\n+\t\treturn fields.map((field) => {\n+\t\t\tif (field.includes('.')) {\n+\t\t\t\treturn field.replaceAll('.', '__');\n+\t\t\t}\n+\n+\t\t\treturn field;\n+\t\t});\n+\t}\n+\n+\tprivate applySort(rowsQuery: Knex.QueryBuilder, sort: Query['sort']) {\n+\t\tif (!sort) return;\n+\n+\t\tfor (const sortField of sort) {\n+\t\t\tif (sortField.startsWith('-')) {\n+\t\t\t\trowsQuery.orderBy(sortField.slice(1), 'desc');\n+\t\t\t} else {\n+\t\t\t\trowsQuery.orderBy(sortField, 'asc');\n+\t\t\t}\n+\t\t}\n+\t}\n+\n+\tprivate applyRawFilter(rowsQuery: Knex.QueryBuilder, filter: Query['filter']) {\n+\t\tif (!filter) return;\n+\n+\t\tfor (const [field, value] of Object.entries(filter)) {\n+\t\t\tif (field === '_and' && Array.isArray(value)) {\n+\t\t\t\trowsQuery.andWhere((builder) => {\n+\t\t\t\t\tfor (const child of value) {\n+\t\t\t\t\t\tthis.applyRawFilter(builder, child);\n+\t\t\t\t\t}\n+\t\t\t\t});\n+\t\t\t\tcontinue;\n+\t\t\t}\n+\n+\t\t\tif (field === '_or' && Array.isArray(value)) {\n+\t\t\t\trowsQuery.andWhere((builder) => {\n+\t\t\t\t\tfor (const child of value) {\n+\t\t\t\t\t\tbuilder.orWhere((orBuilder) => this.applyRawFilter(orBuilder, child));\n+\t\t\t\t\t}\n+\t\t\t\t});\n+\t\t\t\tcontinue;\n+\t\t\t}\n+\n+\t\t\tif (typeof value !== 'object' || value === null) {\n+\t\t\t\trowsQuery.where(field, value);\n+\t\t\t\tcontinue;\n+\t\t\t}\n+\n+\t\t\tif ('_eq' in value) {\n+\t\t\t\trowsQuery.where(field, value['_eq']);\n+\t\t\t}\n+\n+\t\t\tif ('_neq' in value) {\n+\t\t\t\trowsQuery.whereNot(field, value['_neq']);\n+\t\t\t}\n+\n+\t\t\tif ('_in' in value) {\n+\t\t\t\trowsQuery.whereIn(field, toArray(value['_in']));\n+\t\t\t}\n+\n+\t\t\tif ('_contains' in value) {\n+\t\t\t\trowsQuery.where(field, 'like', `%${value['_contains']}%`);\n+\t\t\t}\n+\n+\t\t\tif ('_gte' in value) {\n+\t\t\t\trowsQuery.where(field, '>=', value['_gte']);\n+\t\t\t}\n+\n+\t\t\tif ('_lte' in value) {\n+\t\t\t\trowsQuery.where(field, '<=', value['_lte']);\n+\t\t\t}\n+\t\t}\n+\t}\n+\n+\tprivate transformRows(rows: Record<string, any>[], format: ExportFormat, fields: Query['fields']): string {\n+\t\tif (format === 'json') {\n+\t\t\treturn JSON.stringify(rows, null, '\\t');\n+\t\t}\n+\n+\t\tif (format === 'csv' || format === 'csv_utf8') {\n+\t\t\tconst transforms = [CSVTransforms.flatten({ separator: '.' })];\n+\t\t\tconst withBOM = format === 'csv_utf8';\n+\t\t\tconst normalizedFields = this.normalizeFields(fields);\n+\n+\t\t\treturn new CSVParser({\n+\t\t\t\ttransforms,\n+\t\t\t\twithBOM,\n+\t\t\t\tfields: normalizedFields,\n+\t\t\t}).parse(rows.map((row) => omit(row, ['password', 'token'])));\n+\t\t}\n+\n+\t\tthrow new ServiceUnavailableError({ service: 'saved-query-export', reason: `Unsupported format: ${format}` });\n+\t}\n+\n+\tprivate getMimeType(format: ExportFormat) {\n+\t\tif (format === 'json') return 'application/json';\n+\t\tif (format === 'csv') return 'text/csv';\n+\t\tif (format === 'csv_utf8') return 'text/csv; charset=utf-8';\n+\t\tthrow new InvalidPayloadError({ reason: `Unsupported format: ${format}` });\n+\t}\n+}\ndiff --git a/api/src/controllers/utils.ts b/api/src/controllers/utils.ts\nindex b3450af3f4..ca239bb401 100644\n--- a/api/src/controllers/utils.ts\n+++ b/api/src/controllers/utils.ts\n@@ -10,7 +10,7 @@ import { validateBatch } from '../middleware/validate-batch.js';\n import asyncHandler from '../utils/async-handler.js';\n import { sanitizeQuery } from '../utils/sanitize-query.js';\n import { generateHash } from '../utils/generate-hash.js';\n-import { ExportService, ImportService } from '../services/import-export.js';\n+import { ExportService, ImportService, SavedQueryExportService } from '../services/index.js';\n \n const router = express.Router();\n \n@@ -184,6 +184,39 @@ router.post(\n \trespond,\n );\n \n+router.post(\n+\t'/export/saved-query/:id',\n+\tasyncHandler(async (req, res, next) => {\n+\t\tconst service = new SavedQueryExportService({\n+\t\t\taccountability: req.accountability,\n+\t\t\tschema: req.schema,\n+\t\t});\n+\n+\t\tconst result = await service.exportSavedQuery({\n+\t\t\tsavedQueryId: req.params['id']!,\n+\t\t\tformat: req.body.format,\n+\t\t\tfields: req.body.fields,\n+\t\t\tlimit: req.body.limit,\n+\t\t});\n+\n+\t\tres.setHeader('Content-Type', result.type);\n+\t\tres.setHeader('Content-Disposition', `attachment; filename=\"${result.filename}\"`);\n+\t\tres.locals['payload'] = result.body;\n+\n+\t\treturn next();\n+\t}),\n+\t(_req, res) => {\n+\t\tif (typeof res.locals['payload'] === 'string') {\n+\t\t\treturn res.send(res.locals['payload']);\n+\t\t}\n+\n+\t\treturn res.status(204).end();\n+\t},\n+);\n+\n router.post(\n \t'/translations/generate',\n \tasyncHandler(async (req, res, next) => {\ndiff --git a/api/src/services/index.ts b/api/src/services/index.ts\nindex 53f4f16d29..9d021b1044 100644\n--- a/api/src/services/index.ts\n+++ b/api/src/services/index.ts\n@@ -39,3 +39,4 @@ export * from './utils.js';\n export * from './versions.js';\n export * from './websocket.js';\n+export * from './saved-query-export.js';\ndiff --git a/packages/types/src/saved-query-export.ts b/packages/types/src/saved-query-export.ts\nnew file mode 100644\nindex 0000000000..0ca1c2f1b9\n--- /dev/null\n+++ b/packages/types/src/saved-query-export.ts\n@@ -0,0 +1,66 @@\n+import type { ExportFormat, Query } from './index.js';\n+\n+export type SavedQueryExportRequest = {\n+\tsavedQueryId: string;\n+\tformat?: Extract<ExportFormat, 'csv' | 'csv_utf8' | 'json'>;\n+\tfields?: string[];\n+\tlimit?: number;\n+};\n+\n+export type SavedQueryExportResponse = {\n+\tfilename: string;\n+\ttype: string;\n+\tbody: string;\n+};\n+\n+export type SavedQueryDefinition = {\n+\tid: string;\n+\tcollection: string;\n+\tname: string;\n+\tquery: Query;\n+\tfields?: string[];\n+\tformat: Extract<ExportFormat, 'csv' | 'csv_utf8' | 'json'>;\n+\tshared: boolean;\n+\tuser_created: string | null;\n+};\ndiff --git a/api/src/services/saved-query-export.test.ts b/api/src/services/saved-query-export.test.ts\nnew file mode 100644\nindex 0000000000..51e82d7e9e\n--- /dev/null\n+++ b/api/src/services/saved-query-export.test.ts\n@@ -0,0 +1,205 @@\n+import { beforeEach, describe, expect, it, vi } from 'vitest';\n+import { SavedQueryExportService } from './saved-query-export.js';\n+\n+const rows = [\n+\t{\n+\t\tid: 1,\n+\t\tstatus: 'open',\n+\t\ttitle: 'Broken login',\n+\t\temail: 'customer@example.com',\n+\t\towner: 'support',\n+\t\tpassword: 'redacted-by-transform',\n+\t},\n+];\n+\n+function createKnexMock() {\n+\tconst queryBuilder = {\n+\t\tselect: vi.fn().mockReturnThis(),\n+\t\twhere: vi.fn().mockReturnThis(),\n+\t\twhereNot: vi.fn().mockReturnThis(),\n+\t\twhereIn: vi.fn().mockReturnThis(),\n+\t\tandWhere: vi.fn().mockImplementation((callback) => {\n+\t\t\tcallback(queryBuilder);\n+\t\t\treturn queryBuilder;\n+\t\t}),\n+\t\torWhere: vi.fn().mockImplementation((callback) => {\n+\t\t\tcallback(queryBuilder);\n+\t\t\treturn queryBuilder;\n+\t\t}),\n+\t\torderBy: vi.fn().mockReturnThis(),\n+\t\tlimit: vi.fn().mockReturnThis(),\n+\t\toffset: vi.fn().mockReturnThis(),\n+\t\tthen: vi.fn((resolve) => resolve(rows)),\n+\t};\n+\n+\tconst savedQueryBuilder = {\n+\t\twhere: vi.fn().mockReturnThis(),\n+\t\tfirst: vi.fn().mockResolvedValue({\n+\t\t\tid: 'saved-query-1',\n+\t\t\tcollection: 'support_tickets',\n+\t\t\tname: 'open-tickets',\n+\t\t\tuser_created: 'user-1',\n+\t\t\tquery: {\n+\t\t\t\tfilter: {\n+\t\t\t\t\tstatus: {\n+\t\t\t\t\t\t_eq: 'open',\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t\tsort: ['title'],\n+\t\t\t\tfields: ['id', 'status', 'title', 'email'],\n+\t\t\t\tlimit: -1,\n+\t\t\t},\n+\t\t\tfields: null,\n+\t\t\tformat: 'csv',\n+\t\t\tshared: false,\n+\t\t}),\n+\t};\n+\n+\tconst knex = vi.fn((table: string) => {\n+\t\tif (table === 'directus_saved_queries') {\n+\t\t\treturn savedQueryBuilder;\n+\t\t}\n+\n+\t\treturn queryBuilder;\n+\t});\n+\n+\treturn { knex, queryBuilder, savedQueryBuilder };\n+}\n+\n+describe('SavedQueryExportService', () => {\n+\tbeforeEach(() => {\n+\t\tvi.clearAllMocks();\n+\t});\n+\n+\tit('exports rows for the saved query owner', async () => {\n+\t\tconst { knex, queryBuilder } = createKnexMock();\n+\n+\t\tconst service = new SavedQueryExportService({\n+\t\t\tknex: knex as never,\n+\t\t\taccountability: {\n+\t\t\t\tuser: 'user-1',\n+\t\t\t\trole: 'role-1',\n+\t\t\t\troles: ['role-1'],\n+\t\t\t\tadmin: false,\n+\t\t\t\tapp: false,\n+\t\t\t\tip: null,\n+\t\t\t},\n+\t\t\tschema: {\n+\t\t\t\tcollections: {\n+\t\t\t\t\tsupport_tickets: {\n+\t\t\t\t\t\tcollection: 'support_tickets',\n+\t\t\t\t\t\tprimary: 'id',\n+\t\t\t\t\t\tfields: {},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t\trelations: [],\n+\t\t\t} as never,\n+\t\t});\n+\n+\t\tconst result = await service.exportSavedQuery({ savedQueryId: 'saved-query-1' });\n+\n+\t\texpect(result.type).toBe('text/csv');\n+\t\texpect(result.filename).toContain('support_tickets-open-tickets');\n+\t\texpect(result.body).toContain('Broken login');\n+\t\texpect(result.body).not.toContain('redacted-by-transform');\n+\t\texpect(queryBuilder.where).toHaveBeenCalledWith('status', 'open');\n+\t\texpect(queryBuilder.select).toHaveBeenCalledWith(['id', 'status', 'title', 'email']);\n+\t});\n+\n+\tit('allows shared saved queries for other users', async () => {\n+\t\tconst { knex, savedQueryBuilder } = createKnexMock();\n+\t\tsavedQueryBuilder.first.mockResolvedValueOnce({\n+\t\t\tid: 'saved-query-2',\n+\t\t\tcollection: 'support_tickets',\n+\t\t\tname: 'shared-open-tickets',\n+\t\t\tuser_created: 'user-1',\n+\t\t\tquery: {\n+\t\t\t\tfilter: {\n+\t\t\t\t\tstatus: {\n+\t\t\t\t\t\t_eq: 'open',\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t\tfields: ['id', 'status', 'title', 'email'],\n+\t\t\t},\n+\t\t\tfields: null,\n+\t\t\tformat: 'json',\n+\t\t\tshared: true,\n+\t\t});\n+\n+\t\tconst service = new SavedQueryExportService({\n+\t\t\tknex: knex as never,\n+\t\t\taccountability: {\n+\t\t\t\tuser: 'user-2',\n+\t\t\t\trole: 'role-2',\n+\t\t\t\troles: ['role-2'],\n+\t\t\t\tadmin: false,\n+\t\t\t\tapp: false,\n+\t\t\t\tip: null,\n+\t\t\t},\n+\t\t\tschema: {\n+\t\t\t\tcollections: {\n+\t\t\t\t\tsupport_tickets: {\n+\t\t\t\t\t\tcollection: 'support_tickets',\n+\t\t\t\t\t\tprimary: 'id',\n+\t\t\t\t\t\tfields: {},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t\trelations: [],\n+\t\t\t} as never,\n+\t\t});\n+\n+\t\tconst result = await service.exportSavedQuery({ savedQueryId: 'saved-query-2', format: 'json' });\n+\n+\t\texpect(result.type).toBe('application/json');\n+\t\texpect(result.body).toContain('customer@example.com');\n+\t});\n+\n+\tit('supports _or filters and limit overrides', async () => {\n+\t\tconst { knex, queryBuilder, savedQueryBuilder } = createKnexMock();\n+\t\tsavedQueryBuilder.first.mockResolvedValueOnce({\n+\t\t\tid: 'saved-query-3',\n+\t\t\tcollection: 'support_tickets',\n+\t\t\tname: 'regional-tickets',\n+\t\t\tuser_created: 'user-1',\n+\t\t\tquery: {\n+\t\t\t\tfilter: {\n+\t\t\t\t\t_or: [\n+\t\t\t\t\t\t{ region: { _eq: 'us' } },\n+\t\t\t\t\t\t{ region: { _eq: 'eu' } },\n+\t\t\t\t\t],\n+\t\t\t\t},\n+\t\t\t\tfields: ['id', 'region', 'title'],\n+\t\t\t},\n+\t\t\tfields: null,\n+\t\t\tformat: 'csv',\n+\t\t\tshared: false,\n+\t\t});\n+\n+\t\tconst service = new SavedQueryExportService({\n+\t\t\tknex: knex as never,\n+\t\t\taccountability: {\n+\t\t\t\tuser: 'user-1',\n+\t\t\t\trole: 'role-1',\n+\t\t\t\troles: ['role-1'],\n+\t\t\t\tadmin: false,\n+\t\t\t\tapp: false,\n+\t\t\t\tip: null,\n+\t\t\t},\n+\t\t\tschema: {\n+\t\t\t\tcollections: {\n+\t\t\t\t\tsupport_tickets: {\n+\t\t\t\t\t\tcollection: 'support_tickets',\n+\t\t\t\t\t\tprimary: 'id',\n+\t\t\t\t\t\tfields: {},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t\trelations: [],\n+\t\t\t} as never,\n+\t\t});\n+\n+\t\tawait service.exportSavedQuery({ savedQueryId: 'saved-query-3', limit: 100 });\n+\n+\t\texpect(queryBuilder.orWhere).toHaveBeenCalled();\n+\t\texpect(queryBuilder.limit).toHaveBeenCalledWith(100);\n+\t});\n+});",
+    "files": [
+      {
+        "oldPath": "api/src/database/migrations/20260516000100-add-saved-queries.ts",
+        "newPath": "api/src/database/migrations/20260516000100-add-saved-queries.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -0,0 +1,57 @@",
+            "oldStart": 0,
+            "newStart": 1,
+            "lines": [
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:1",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1,
+                "content": "import type { Knex } from 'knex';"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:2",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 2,
+                "content": ""
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:3",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 3,
+                "content": "export async function up(knex: Knex): Promise<void> {"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:4",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 4,
+                "content": "\tawait knex.schema.createTable('directus_saved_queries', (table) => {"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:5",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 5,
+                "content": "\t\ttable.uuid('id').primary();"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:6",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 6,
+                "content": "\t\ttable.string('collection').notNullable();"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:7",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 7,
+                "content": "\t\ttable.string('name').notNullable();"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:8",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 8,
+                "content": "\t\ttable.uuid('user_created').nullable();"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:9",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 9,
+                "content": "\t\ttable.timestamp('date_created').notNullable().defaultTo(knex.fn.now());"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:10",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 10,
+                "content": "\t\ttable.json('query').notNullable();"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:11",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 11,
+                "content": "\t\ttable.json('fields').nullable();"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:12",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 12,
+                "content": "\t\ttable.string('format').notNullable().defaultTo('csv');"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:13",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 13,
+                "content": "\t\ttable.boolean('shared').notNullable().defaultTo(false);"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:14",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 14,
+                "content": ""
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:15",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 15,
+                "content": "\t\ttable.foreign('user_created').references('id').inTable('directus_users').onDelete('SET NULL');"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:16",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 16,
+                "content": "\t\ttable.index(['collection']);"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:17",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 17,
+                "content": "\t\ttable.index(['user_created']);"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:18",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 18,
+                "content": "\t\ttable.index(['shared']);"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:19",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 19,
+                "content": "\t});"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:20",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 20,
+                "content": "}"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:21",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 21,
+                "content": ""
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:22",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 22,
+                "content": "export async function down(knex: Knex): Promise<void> {"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:23",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 23,
+                "content": "\tawait knex.schema.dropTable('directus_saved_queries');"
+              },
+              {
+                "id": "api/src/database/migrations/20260516000100-add-saved-queries.ts:24",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 24,
+                "content": "}"
+              }
+            ]
+          }
+        ],
+        "additions": 24,
+        "deletions": 0
+      },
+      {
+        "oldPath": "api/src/services/saved-query-export.ts",
+        "newPath": "api/src/services/saved-query-export.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -0,0 +1,274 @@",
+            "oldStart": 0,
+            "newStart": 1,
+            "lines": [
+              {
+                "id": "api/src/services/saved-query-export.ts:1",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1,
+                "content": "import { createError, ForbiddenError, InvalidPayloadError, ServiceUnavailableError } from '@directus/errors';"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:2",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 2,
+                "content": "import type { AbstractServiceOptions, Accountability, ExportFormat, Query, SchemaOverview } from '@directus/types';"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:3",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 3,
+                "content": "import { getDateTimeFormatted, parseJSON, toArray } from '@directus/utils';"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:4",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 4,
+                "content": "import { Parser as CSVParser, transforms as CSVTransforms } from 'json2csv';"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:5",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 5,
+                "content": "import type { Knex } from 'knex';"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:6",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 6,
+                "content": "import { omit } from 'lodash-es';"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:7",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 7,
+                "content": "import getDatabase from '../database/index.js';"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:8",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 8,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:9",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 9,
+                "content": "const SavedQueryNotFoundError = createError('SAVED_QUERY_NOT_FOUND', 'Saved query does not exist.', 404);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:10",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 10,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:11",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 11,
+                "content": "type SavedQueryRow = {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:12",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 12,
+                "content": "\tid: string;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:13",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 13,
+                "content": "\tcollection: string;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:14",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 14,
+                "content": "\tname: string;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:15",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 15,
+                "content": "\tuser_created: string | null;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:16",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 16,
+                "content": "\tquery: Record<string, any> | string;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:17",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 17,
+                "content": "\tfields: string[] | string | null;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:18",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 18,
+                "content": "\tformat: ExportFormat;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:19",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 19,
+                "content": "\tshared: boolean;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:20",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 20,
+                "content": "};"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:21",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 21,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:22",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 22,
+                "content": "type ExportSavedQueryOptions = {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:23",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 23,
+                "content": "\tsavedQueryId: string;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:24",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 24,
+                "content": "\tformat?: ExportFormat;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:25",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 25,
+                "content": "\tfields?: string[];"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:26",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 26,
+                "content": "\tlimit?: number;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:27",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 27,
+                "content": "};"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:28",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 28,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:29",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 29,
+                "content": "type ExportFileResponse = {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:30",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 30,
+                "content": "\tfilename: string;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:31",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 31,
+                "content": "\ttype: string;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:32",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 32,
+                "content": "\tbody: string;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:33",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 33,
+                "content": "};"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:34",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 34,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:35",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 35,
+                "content": "export class SavedQueryExportService {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:36",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 36,
+                "content": "\tknex: Knex;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:37",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 37,
+                "content": "\taccountability: Accountability | null;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:38",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 38,
+                "content": "\tschema: SchemaOverview;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:39",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 39,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:40",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 40,
+                "content": "\tconstructor(options: AbstractServiceOptions) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:41",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 41,
+                "content": "\t\tthis.knex = options.knex || getDatabase();"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:42",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 42,
+                "content": "\t\tthis.accountability = options.accountability || null;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:43",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 43,
+                "content": "\t\tthis.schema = options.schema;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:44",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 44,
+                "content": "\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:45",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 45,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:46",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 46,
+                "content": "\tasync exportSavedQuery(options: ExportSavedQueryOptions): Promise<ExportFileResponse> {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:47",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 47,
+                "content": "\t\tconst savedQuery = await this.getSavedQuery(options.savedQueryId);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:48",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 48,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:49",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 49,
+                "content": "\t\tif (!savedQuery.shared && savedQuery.user_created !== this.accountability?.user) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:50",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 50,
+                "content": "\t\t\tthrow new ForbiddenError();"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:51",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 51,
+                "content": "\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:52",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 52,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:53",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 53,
+                "content": "\t\tconst query = this.normalizeStoredQuery(savedQuery, {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:54",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 54,
+                "content": "\t\t\tfields: options.fields,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:55",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 55,
+                "content": "\t\t\tlimit: options.limit,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:56",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 56,
+                "content": "\t\t});"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:57",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 57,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:58",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 58,
+                "content": "\t\tconst rows = await this.readRowsForSavedQuery(savedQuery.collection, query);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:59",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 59,
+                "content": "\t\tconst format = options.format ?? savedQuery.format ?? 'csv';"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:60",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 60,
+                "content": "\t\tconst body = this.transformRows(rows, format, query.fields);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:61",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 61,
+                "content": "\t\tconst extension = format === 'csv_utf8' ? 'csv' : format;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:62",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 62,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:63",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 63,
+                "content": "\t\treturn {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:64",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 64,
+                "content": "\t\t\tfilename: `${savedQuery.collection}-${savedQuery.name}-${getDateTimeFormatted()}.${extension}`,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:65",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 65,
+                "content": "\t\t\ttype: this.getMimeType(format),"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:66",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 66,
+                "content": "\t\t\tbody,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:67",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 67,
+                "content": "\t\t};"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:68",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 68,
+                "content": "\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:69",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 69,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:70",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 70,
+                "content": "\tprivate async getSavedQuery(id: string): Promise<SavedQueryRow> {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:71",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 71,
+                "content": "\t\tconst savedQuery = await this.knex<SavedQueryRow>('directus_saved_queries').where({ id }).first();"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:72",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 72,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:73",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 73,
+                "content": "\t\tif (!savedQuery) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:74",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 74,
+                "content": "\t\t\tthrow new SavedQueryNotFoundError();"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:75",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 75,
+                "content": "\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:76",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 76,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:77",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 77,
+                "content": "\t\treturn savedQuery;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:78",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 78,
+                "content": "\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:79",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 79,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:80",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 80,
+                "content": "\tprivate normalizeStoredQuery("
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:81",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 81,
+                "content": "\t\tsavedQuery: SavedQueryRow,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:82",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 82,
+                "content": "\t\toverrides: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:83",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 83,
+                "content": "\t\t\tfields?: string[];"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:84",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 84,
+                "content": "\t\t\tlimit?: number;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:85",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 85,
+                "content": "\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:86",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 86,
+                "content": "\t): Query {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:87",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 87,
+                "content": "\t\tconst storedQuery ="
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:88",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 88,
+                "content": "\t\t\ttypeof savedQuery.query === 'string' ? parseJSON(savedQuery.query) : { ...savedQuery.query };"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:89",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 89,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:90",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 90,
+                "content": "\t\tconst storedFields ="
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:91",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 91,
+                "content": "\t\t\ttypeof savedQuery.fields === 'string'"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:92",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 92,
+                "content": "\t\t\t\t? toArray(savedQuery.fields)"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:93",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 93,
+                "content": "\t\t\t\t: Array.isArray(savedQuery.fields)"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:94",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 94,
+                "content": "\t\t\t\t\t? savedQuery.fields"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:95",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 95,
+                "content": "\t\t\t\t\t: undefined;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:96",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 96,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:97",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 97,
+                "content": "\t\treturn {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:98",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 98,
+                "content": "\t\t\t...storedQuery,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:99",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 99,
+                "content": "\t\t\tfields: overrides.fields ?? storedQuery.fields ?? storedFields ?? ['*'],"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:100",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 100,
+                "content": "\t\t\tlimit: overrides.limit ?? storedQuery.limit ?? -1,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:101",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 101,
+                "content": "\t\t};"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:102",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 102,
+                "content": "\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:103",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 103,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:104",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 104,
+                "content": "\tprivate async readRowsForSavedQuery(collection: string, query: Query) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:105",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 105,
+                "content": "\t\tconst fields = this.normalizeFields(query.fields);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:106",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 106,
+                "content": "\t\tconst rowsQuery = this.knex(collection).select(fields);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:107",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 107,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:108",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 108,
+                "content": "\t\tthis.applyRawFilter(rowsQuery, query.filter);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:109",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 109,
+                "content": "\t\tthis.applySort(rowsQuery, query.sort);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:110",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 110,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:111",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 111,
+                "content": "\t\tif (typeof query.limit === 'number' && query.limit > 0) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:112",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 112,
+                "content": "\t\t\trowsQuery.limit(query.limit);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:113",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 113,
+                "content": "\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:114",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 114,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:115",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 115,
+                "content": "\t\tif (typeof query.offset === 'number' && query.offset > 0) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:116",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 116,
+                "content": "\t\t\trowsQuery.offset(query.offset);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:117",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 117,
+                "content": "\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:118",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 118,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:119",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 119,
+                "content": "\t\treturn await rowsQuery;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:120",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 120,
+                "content": "\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:121",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 121,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:122",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 122,
+                "content": "\tprivate normalizeFields(fields: Query['fields']) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:123",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 123,
+                "content": "\t\tif (!fields || fields.length === 0) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:124",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 124,
+                "content": "\t\t\treturn ['*'];"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:125",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 125,
+                "content": "\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:126",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 126,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:127",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 127,
+                "content": "\t\treturn fields.map((field) => {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:128",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 128,
+                "content": "\t\t\tif (field.includes('.')) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:129",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 129,
+                "content": "\t\t\t\treturn field.replaceAll('.', '__');"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:130",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 130,
+                "content": "\t\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:131",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 131,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:132",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 132,
+                "content": "\t\t\treturn field;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:133",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 133,
+                "content": "\t\t});"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:134",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 134,
+                "content": "\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:135",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 135,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:136",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 136,
+                "content": "\tprivate applySort(rowsQuery: Knex.QueryBuilder, sort: Query['sort']) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:137",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 137,
+                "content": "\t\tif (!sort) return;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:138",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 138,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:139",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 139,
+                "content": "\t\tfor (const sortField of sort) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:140",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 140,
+                "content": "\t\t\tif (sortField.startsWith('-')) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:141",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 141,
+                "content": "\t\t\t\trowsQuery.orderBy(sortField.slice(1), 'desc');"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:142",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 142,
+                "content": "\t\t\t} else {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:143",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 143,
+                "content": "\t\t\t\trowsQuery.orderBy(sortField, 'asc');"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:144",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 144,
+                "content": "\t\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:145",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 145,
+                "content": "\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:146",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 146,
+                "content": "\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:147",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 147,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:148",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 148,
+                "content": "\tprivate applyRawFilter(rowsQuery: Knex.QueryBuilder, filter: Query['filter']) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:149",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 149,
+                "content": "\t\tif (!filter) return;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:150",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 150,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:151",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 151,
+                "content": "\t\tfor (const [field, value] of Object.entries(filter)) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:152",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 152,
+                "content": "\t\t\tif (field === '_and' && Array.isArray(value)) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:153",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 153,
+                "content": "\t\t\t\trowsQuery.andWhere((builder) => {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:154",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 154,
+                "content": "\t\t\t\t\tfor (const child of value) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:155",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 155,
+                "content": "\t\t\t\t\t\tthis.applyRawFilter(builder, child);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:156",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 156,
+                "content": "\t\t\t\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:157",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 157,
+                "content": "\t\t\t\t});"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:158",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 158,
+                "content": "\t\t\t\tcontinue;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:159",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 159,
+                "content": "\t\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:160",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 160,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:161",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 161,
+                "content": "\t\t\tif (field === '_or' && Array.isArray(value)) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:162",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 162,
+                "content": "\t\t\t\trowsQuery.andWhere((builder) => {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:163",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 163,
+                "content": "\t\t\t\t\tfor (const child of value) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:164",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 164,
+                "content": "\t\t\t\t\t\tbuilder.orWhere((orBuilder) => this.applyRawFilter(orBuilder, child));"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:165",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 165,
+                "content": "\t\t\t\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:166",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 166,
+                "content": "\t\t\t\t});"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:167",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 167,
+                "content": "\t\t\t\tcontinue;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:168",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 168,
+                "content": "\t\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:169",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 169,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:170",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 170,
+                "content": "\t\t\tif (typeof value !== 'object' || value === null) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:171",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 171,
+                "content": "\t\t\t\trowsQuery.where(field, value);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:172",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 172,
+                "content": "\t\t\t\tcontinue;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:173",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 173,
+                "content": "\t\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:174",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 174,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:175",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 175,
+                "content": "\t\t\tif ('_eq' in value) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:176",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 176,
+                "content": "\t\t\t\trowsQuery.where(field, value['_eq']);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:177",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 177,
+                "content": "\t\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:178",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 178,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:179",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 179,
+                "content": "\t\t\tif ('_neq' in value) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:180",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 180,
+                "content": "\t\t\t\trowsQuery.whereNot(field, value['_neq']);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:181",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 181,
+                "content": "\t\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:182",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 182,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:183",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 183,
+                "content": "\t\t\tif ('_in' in value) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:184",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 184,
+                "content": "\t\t\t\trowsQuery.whereIn(field, toArray(value['_in']));"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:185",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 185,
+                "content": "\t\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:186",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 186,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:187",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 187,
+                "content": "\t\t\tif ('_contains' in value) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:188",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 188,
+                "content": "\t\t\t\trowsQuery.where(field, 'like', `%${value['_contains']}%`);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:189",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 189,
+                "content": "\t\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:190",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 190,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:191",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 191,
+                "content": "\t\t\tif ('_gte' in value) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:192",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 192,
+                "content": "\t\t\t\trowsQuery.where(field, '>=', value['_gte']);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:193",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 193,
+                "content": "\t\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:194",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 194,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:195",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 195,
+                "content": "\t\t\tif ('_lte' in value) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:196",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 196,
+                "content": "\t\t\t\trowsQuery.where(field, '<=', value['_lte']);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:197",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 197,
+                "content": "\t\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:198",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 198,
+                "content": "\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:199",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 199,
+                "content": "\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:200",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 200,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:201",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 201,
+                "content": "\tprivate transformRows(rows: Record<string, any>[], format: ExportFormat, fields: Query['fields']): string {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:202",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 202,
+                "content": "\t\tif (format === 'json') {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:203",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 203,
+                "content": "\t\t\treturn JSON.stringify(rows, null, '\\t');"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:204",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 204,
+                "content": "\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:205",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 205,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:206",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 206,
+                "content": "\t\tif (format === 'csv' || format === 'csv_utf8') {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:207",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 207,
+                "content": "\t\t\tconst transforms = [CSVTransforms.flatten({ separator: '.' })];"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:208",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 208,
+                "content": "\t\t\tconst withBOM = format === 'csv_utf8';"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:209",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 209,
+                "content": "\t\t\tconst normalizedFields = this.normalizeFields(fields);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:210",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 210,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:211",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 211,
+                "content": "\t\t\treturn new CSVParser({"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:212",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 212,
+                "content": "\t\t\t\ttransforms,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:213",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 213,
+                "content": "\t\t\t\twithBOM,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:214",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 214,
+                "content": "\t\t\t\tfields: normalizedFields,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:215",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 215,
+                "content": "\t\t\t}).parse(rows.map((row) => omit(row, ['password', 'token'])));"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:216",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 216,
+                "content": "\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:217",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 217,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:218",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 218,
+                "content": "\t\tthrow new ServiceUnavailableError({ service: 'saved-query-export', reason: `Unsupported format: ${format}` });"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:219",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 219,
+                "content": "\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:220",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 220,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:221",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 221,
+                "content": "\tprivate getMimeType(format: ExportFormat) {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:222",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 222,
+                "content": "\t\tif (format === 'json') return 'application/json';"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:223",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 223,
+                "content": "\t\tif (format === 'csv') return 'text/csv';"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:224",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 224,
+                "content": "\t\tif (format === 'csv_utf8') return 'text/csv; charset=utf-8';"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:225",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 225,
+                "content": "\t\tthrow new InvalidPayloadError({ reason: `Unsupported format: ${format}` });"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:226",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 226,
+                "content": "\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.ts:227",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 227,
+                "content": "}"
+              }
+            ]
+          }
+        ],
+        "additions": 227,
+        "deletions": 0
+      },
+      {
+        "oldPath": "api/src/controllers/utils.ts",
+        "newPath": "api/src/controllers/utils.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -10,7 +10,7 @@ import { validateBatch } from '../middleware/validate-batch.js';",
+            "oldStart": 10,
+            "newStart": 10,
+            "lines": [
+              {
+                "id": "api/src/controllers/utils.ts:10",
+                "type": "context",
+                "oldLine": 10,
+                "newLine": 10,
+                "content": "import asyncHandler from '../utils/async-handler.js';"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:11",
+                "type": "context",
+                "oldLine": 11,
+                "newLine": 11,
+                "content": "import { sanitizeQuery } from '../utils/sanitize-query.js';"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:12",
+                "type": "context",
+                "oldLine": 12,
+                "newLine": 12,
+                "content": "import { generateHash } from '../utils/generate-hash.js';"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:old-13",
+                "type": "delete",
+                "oldLine": 13,
+                "newLine": null,
+                "content": "import { ExportService, ImportService } from '../services/import-export.js';"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:13",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 13,
+                "content": "import { ExportService, ImportService, SavedQueryExportService } from '../services/index.js';"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:14",
+                "type": "context",
+                "oldLine": 14,
+                "newLine": 14,
+                "content": ""
+              },
+              {
+                "id": "api/src/controllers/utils.ts:15",
+                "type": "context",
+                "oldLine": 15,
+                "newLine": 15,
+                "content": "const router = express.Router();"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:16",
+                "type": "context",
+                "oldLine": 16,
+                "newLine": 16,
+                "content": ""
+              }
+            ]
+          },
+          {
+            "header": "@@ -184,6 +184,39 @@ router.post(",
+            "oldStart": 184,
+            "newStart": 184,
+            "lines": [
+              {
+                "id": "api/src/controllers/utils.ts:184",
+                "type": "context",
+                "oldLine": 184,
+                "newLine": 184,
+                "content": "\trespond,"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:185",
+                "type": "context",
+                "oldLine": 185,
+                "newLine": 185,
+                "content": ");"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:186",
+                "type": "context",
+                "oldLine": 186,
+                "newLine": 186,
+                "content": ""
+              },
+              {
+                "id": "api/src/controllers/utils.ts:187",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 187,
+                "content": "router.post("
+              },
+              {
+                "id": "api/src/controllers/utils.ts:188",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 188,
+                "content": "\t'/export/saved-query/:id',"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:189",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 189,
+                "content": "\tasyncHandler(async (req, res, next) => {"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:190",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 190,
+                "content": "\t\tconst service = new SavedQueryExportService({"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:191",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 191,
+                "content": "\t\t\taccountability: req.accountability,"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:192",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 192,
+                "content": "\t\t\tschema: req.schema,"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:193",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 193,
+                "content": "\t\t});"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:194",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 194,
+                "content": ""
+              },
+              {
+                "id": "api/src/controllers/utils.ts:195",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 195,
+                "content": "\t\tconst result = await service.exportSavedQuery({"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:196",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 196,
+                "content": "\t\t\tsavedQueryId: req.params['id']!,"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:197",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 197,
+                "content": "\t\t\tformat: req.body.format,"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:198",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 198,
+                "content": "\t\t\tfields: req.body.fields,"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:199",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 199,
+                "content": "\t\t\tlimit: req.body.limit,"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:200",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 200,
+                "content": "\t\t});"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:201",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 201,
+                "content": ""
+              },
+              {
+                "id": "api/src/controllers/utils.ts:202",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 202,
+                "content": "\t\tres.setHeader('Content-Type', result.type);"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:203",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 203,
+                "content": "\t\tres.setHeader('Content-Disposition', `attachment; filename=\"${result.filename}\"`);"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:204",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 204,
+                "content": "\t\tres.locals['payload'] = result.body;"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:205",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 205,
+                "content": ""
+              },
+              {
+                "id": "api/src/controllers/utils.ts:206",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 206,
+                "content": "\t\treturn next();"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:207",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 207,
+                "content": "\t}),"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:208",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 208,
+                "content": "\t(_req, res) => {"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:209",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 209,
+                "content": "\t\tif (typeof res.locals['payload'] === 'string') {"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:210",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 210,
+                "content": "\t\t\treturn res.send(res.locals['payload']);"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:211",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 211,
+                "content": "\t\t}"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:212",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 212,
+                "content": ""
+              },
+              {
+                "id": "api/src/controllers/utils.ts:213",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 213,
+                "content": "\t\treturn res.status(204).end();"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:214",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 214,
+                "content": "\t},"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:215",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 215,
+                "content": ");"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:216",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 216,
+                "content": ""
+              },
+              {
+                "id": "api/src/controllers/utils.ts:217",
+                "type": "context",
+                "oldLine": 187,
+                "newLine": 217,
+                "content": "router.post("
+              },
+              {
+                "id": "api/src/controllers/utils.ts:218",
+                "type": "context",
+                "oldLine": 188,
+                "newLine": 218,
+                "content": "\t'/translations/generate',"
+              },
+              {
+                "id": "api/src/controllers/utils.ts:219",
+                "type": "context",
+                "oldLine": 189,
+                "newLine": 219,
+                "content": "\tasyncHandler(async (req, res, next) => {"
+              }
+            ]
+          }
+        ],
+        "additions": 31,
+        "deletions": 1
+      },
+      {
+        "oldPath": "api/src/services/index.ts",
+        "newPath": "api/src/services/index.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -39,3 +39,4 @@ export * from './utils.js';",
+            "oldStart": 39,
+            "newStart": 39,
+            "lines": [
+              {
+                "id": "api/src/services/index.ts:39",
+                "type": "context",
+                "oldLine": 39,
+                "newLine": 39,
+                "content": "export * from './versions.js';"
+              },
+              {
+                "id": "api/src/services/index.ts:40",
+                "type": "context",
+                "oldLine": 40,
+                "newLine": 40,
+                "content": "export * from './websocket.js';"
+              },
+              {
+                "id": "api/src/services/index.ts:41",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 41,
+                "content": "export * from './saved-query-export.js';"
+              }
+            ]
+          }
+        ],
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "oldPath": "packages/types/src/saved-query-export.ts",
+        "newPath": "packages/types/src/saved-query-export.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -0,0 +1,66 @@",
+            "oldStart": 0,
+            "newStart": 1,
+            "lines": [
+              {
+                "id": "packages/types/src/saved-query-export.ts:1",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1,
+                "content": "import type { ExportFormat, Query } from './index.js';"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:2",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 2,
+                "content": ""
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:3",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 3,
+                "content": "export type SavedQueryExportRequest = {"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:4",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 4,
+                "content": "\tsavedQueryId: string;"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:5",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 5,
+                "content": "\tformat?: Extract<ExportFormat, 'csv' | 'csv_utf8' | 'json'>;"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:6",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 6,
+                "content": "\tfields?: string[];"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:7",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 7,
+                "content": "\tlimit?: number;"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:8",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 8,
+                "content": "};"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:9",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 9,
+                "content": ""
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:10",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 10,
+                "content": "export type SavedQueryExportResponse = {"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:11",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 11,
+                "content": "\tfilename: string;"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:12",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 12,
+                "content": "\ttype: string;"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:13",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 13,
+                "content": "\tbody: string;"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:14",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 14,
+                "content": "};"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:15",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 15,
+                "content": ""
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:16",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 16,
+                "content": "export type SavedQueryDefinition = {"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:17",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 17,
+                "content": "\tid: string;"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:18",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 18,
+                "content": "\tcollection: string;"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:19",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 19,
+                "content": "\tname: string;"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:20",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 20,
+                "content": "\tquery: Query;"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:21",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 21,
+                "content": "\tfields?: string[];"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:22",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 22,
+                "content": "\tformat: Extract<ExportFormat, 'csv' | 'csv_utf8' | 'json'>;"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:23",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 23,
+                "content": "\tshared: boolean;"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:24",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 24,
+                "content": "\tuser_created: string | null;"
+              },
+              {
+                "id": "packages/types/src/saved-query-export.ts:25",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 25,
+                "content": "};"
+              }
+            ]
+          }
+        ],
+        "additions": 25,
+        "deletions": 0
+      },
+      {
+        "oldPath": "api/src/services/saved-query-export.test.ts",
+        "newPath": "api/src/services/saved-query-export.test.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -0,0 +1,205 @@",
+            "oldStart": 0,
+            "newStart": 1,
+            "lines": [
+              {
+                "id": "api/src/services/saved-query-export.test.ts:1",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1,
+                "content": "import { beforeEach, describe, expect, it, vi } from 'vitest';"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:2",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 2,
+                "content": "import { SavedQueryExportService } from './saved-query-export.js';"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:3",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 3,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:4",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 4,
+                "content": "const rows = ["
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:5",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 5,
+                "content": "\t{"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:6",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 6,
+                "content": "\t\tid: 1,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:7",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 7,
+                "content": "\t\tstatus: 'open',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:8",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 8,
+                "content": "\t\ttitle: 'Broken login',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:9",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 9,
+                "content": "\t\temail: 'customer@example.com',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:10",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 10,
+                "content": "\t\towner: 'support',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:11",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 11,
+                "content": "\t\tpassword: 'redacted-by-transform',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:12",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 12,
+                "content": "\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:13",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 13,
+                "content": "];"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:14",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 14,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:15",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 15,
+                "content": "function createKnexMock() {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:16",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 16,
+                "content": "\tconst queryBuilder = {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:17",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 17,
+                "content": "\t\tselect: vi.fn().mockReturnThis(),"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:18",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 18,
+                "content": "\t\twhere: vi.fn().mockReturnThis(),"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:19",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 19,
+                "content": "\t\twhereNot: vi.fn().mockReturnThis(),"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:20",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 20,
+                "content": "\t\twhereIn: vi.fn().mockReturnThis(),"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:21",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 21,
+                "content": "\t\tandWhere: vi.fn().mockImplementation((callback) => {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:22",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 22,
+                "content": "\t\t\tcallback(queryBuilder);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:23",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 23,
+                "content": "\t\t\treturn queryBuilder;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:24",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 24,
+                "content": "\t\t}),"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:25",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 25,
+                "content": "\t\torWhere: vi.fn().mockImplementation((callback) => {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:26",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 26,
+                "content": "\t\t\tcallback(queryBuilder);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:27",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 27,
+                "content": "\t\t\treturn queryBuilder;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:28",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 28,
+                "content": "\t\t}),"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:29",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 29,
+                "content": "\t\torderBy: vi.fn().mockReturnThis(),"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:30",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 30,
+                "content": "\t\tlimit: vi.fn().mockReturnThis(),"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:31",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 31,
+                "content": "\t\toffset: vi.fn().mockReturnThis(),"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:32",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 32,
+                "content": "\t\tthen: vi.fn((resolve) => resolve(rows)),"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:33",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 33,
+                "content": "\t};"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:34",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 34,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:35",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 35,
+                "content": "\tconst savedQueryBuilder = {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:36",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 36,
+                "content": "\t\twhere: vi.fn().mockReturnThis(),"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:37",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 37,
+                "content": "\t\tfirst: vi.fn().mockResolvedValue({"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:38",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 38,
+                "content": "\t\t\tid: 'saved-query-1',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:39",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 39,
+                "content": "\t\t\tcollection: 'support_tickets',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:40",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 40,
+                "content": "\t\t\tname: 'open-tickets',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:41",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 41,
+                "content": "\t\t\tuser_created: 'user-1',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:42",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 42,
+                "content": "\t\t\tquery: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:43",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 43,
+                "content": "\t\t\t\tfilter: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:44",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 44,
+                "content": "\t\t\t\t\tstatus: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:45",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 45,
+                "content": "\t\t\t\t\t\t_eq: 'open',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:46",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 46,
+                "content": "\t\t\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:47",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 47,
+                "content": "\t\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:48",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 48,
+                "content": "\t\t\t\tsort: ['title'],"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:49",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 49,
+                "content": "\t\t\t\tfields: ['id', 'status', 'title', 'email'],"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:50",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 50,
+                "content": "\t\t\t\tlimit: -1,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:51",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 51,
+                "content": "\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:52",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 52,
+                "content": "\t\t\tfields: null,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:53",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 53,
+                "content": "\t\t\tformat: 'csv',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:54",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 54,
+                "content": "\t\t\tshared: false,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:55",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 55,
+                "content": "\t\t}),"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:56",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 56,
+                "content": "\t};"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:57",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 57,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:58",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 58,
+                "content": "\tconst knex = vi.fn((table: string) => {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:59",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 59,
+                "content": "\t\tif (table === 'directus_saved_queries') {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:60",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 60,
+                "content": "\t\t\treturn savedQueryBuilder;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:61",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 61,
+                "content": "\t\t}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:62",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 62,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:63",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 63,
+                "content": "\t\treturn queryBuilder;"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:64",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 64,
+                "content": "\t});"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:65",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 65,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:66",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 66,
+                "content": "\treturn { knex, queryBuilder, savedQueryBuilder };"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:67",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 67,
+                "content": "}"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:68",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 68,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:69",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 69,
+                "content": "describe('SavedQueryExportService', () => {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:70",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 70,
+                "content": "\tbeforeEach(() => {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:71",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 71,
+                "content": "\t\tvi.clearAllMocks();"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:72",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 72,
+                "content": "\t});"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:73",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 73,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:74",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 74,
+                "content": "\tit('exports rows for the saved query owner', async () => {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:75",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 75,
+                "content": "\t\tconst { knex, queryBuilder } = createKnexMock();"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:76",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 76,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:77",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 77,
+                "content": "\t\tconst service = new SavedQueryExportService({"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:78",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 78,
+                "content": "\t\t\tknex: knex as never,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:79",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 79,
+                "content": "\t\t\taccountability: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:80",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 80,
+                "content": "\t\t\t\tuser: 'user-1',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:81",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 81,
+                "content": "\t\t\t\trole: 'role-1',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:82",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 82,
+                "content": "\t\t\t\troles: ['role-1'],"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:83",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 83,
+                "content": "\t\t\t\tadmin: false,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:84",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 84,
+                "content": "\t\t\t\tapp: false,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:85",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 85,
+                "content": "\t\t\t\tip: null,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:86",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 86,
+                "content": "\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:87",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 87,
+                "content": "\t\t\tschema: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:88",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 88,
+                "content": "\t\t\t\tcollections: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:89",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 89,
+                "content": "\t\t\t\t\tsupport_tickets: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:90",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 90,
+                "content": "\t\t\t\t\t\tcollection: 'support_tickets',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:91",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 91,
+                "content": "\t\t\t\t\t\tprimary: 'id',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:92",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 92,
+                "content": "\t\t\t\t\t\tfields: {},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:93",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 93,
+                "content": "\t\t\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:94",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 94,
+                "content": "\t\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:95",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 95,
+                "content": "\t\t\t\trelations: [],"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:96",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 96,
+                "content": "\t\t\t} as never,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:97",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 97,
+                "content": "\t\t});"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:98",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 98,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:99",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 99,
+                "content": "\t\tconst result = await service.exportSavedQuery({ savedQueryId: 'saved-query-1' });"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:100",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 100,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:101",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 101,
+                "content": "\t\texpect(result.type).toBe('text/csv');"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:102",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 102,
+                "content": "\t\texpect(result.filename).toContain('support_tickets-open-tickets');"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:103",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 103,
+                "content": "\t\texpect(result.body).toContain('Broken login');"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:104",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 104,
+                "content": "\t\texpect(result.body).not.toContain('redacted-by-transform');"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:105",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 105,
+                "content": "\t\texpect(queryBuilder.where).toHaveBeenCalledWith('status', 'open');"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:106",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 106,
+                "content": "\t\texpect(queryBuilder.select).toHaveBeenCalledWith(['id', 'status', 'title', 'email']);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:107",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 107,
+                "content": "\t});"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:108",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 108,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:109",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 109,
+                "content": "\tit('allows shared saved queries for other users', async () => {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:110",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 110,
+                "content": "\t\tconst { knex, savedQueryBuilder } = createKnexMock();"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:111",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 111,
+                "content": "\t\tsavedQueryBuilder.first.mockResolvedValueOnce({"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:112",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 112,
+                "content": "\t\t\tid: 'saved-query-2',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:113",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 113,
+                "content": "\t\t\tcollection: 'support_tickets',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:114",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 114,
+                "content": "\t\t\tname: 'shared-open-tickets',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:115",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 115,
+                "content": "\t\t\tuser_created: 'user-1',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:116",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 116,
+                "content": "\t\t\tquery: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:117",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 117,
+                "content": "\t\t\t\tfilter: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:118",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 118,
+                "content": "\t\t\t\t\tstatus: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:119",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 119,
+                "content": "\t\t\t\t\t\t_eq: 'open',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:120",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 120,
+                "content": "\t\t\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:121",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 121,
+                "content": "\t\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:122",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 122,
+                "content": "\t\t\t\tfields: ['id', 'status', 'title', 'email'],"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:123",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 123,
+                "content": "\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:124",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 124,
+                "content": "\t\t\tfields: null,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:125",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 125,
+                "content": "\t\t\tformat: 'json',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:126",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 126,
+                "content": "\t\t\tshared: true,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:127",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 127,
+                "content": "\t\t});"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:128",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 128,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:129",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 129,
+                "content": "\t\tconst service = new SavedQueryExportService({"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:130",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 130,
+                "content": "\t\t\tknex: knex as never,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:131",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 131,
+                "content": "\t\t\taccountability: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:132",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 132,
+                "content": "\t\t\t\tuser: 'user-2',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:133",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 133,
+                "content": "\t\t\t\trole: 'role-2',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:134",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 134,
+                "content": "\t\t\t\troles: ['role-2'],"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:135",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 135,
+                "content": "\t\t\t\tadmin: false,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:136",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 136,
+                "content": "\t\t\t\tapp: false,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:137",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 137,
+                "content": "\t\t\t\tip: null,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:138",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 138,
+                "content": "\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:139",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 139,
+                "content": "\t\t\tschema: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:140",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 140,
+                "content": "\t\t\t\tcollections: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:141",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 141,
+                "content": "\t\t\t\t\tsupport_tickets: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:142",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 142,
+                "content": "\t\t\t\t\t\tcollection: 'support_tickets',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:143",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 143,
+                "content": "\t\t\t\t\t\tprimary: 'id',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:144",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 144,
+                "content": "\t\t\t\t\t\tfields: {},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:145",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 145,
+                "content": "\t\t\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:146",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 146,
+                "content": "\t\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:147",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 147,
+                "content": "\t\t\t\trelations: [],"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:148",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 148,
+                "content": "\t\t\t} as never,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:149",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 149,
+                "content": "\t\t});"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:150",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 150,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:151",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 151,
+                "content": "\t\tconst result = await service.exportSavedQuery({ savedQueryId: 'saved-query-2', format: 'json' });"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:152",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 152,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:153",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 153,
+                "content": "\t\texpect(result.type).toBe('application/json');"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:154",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 154,
+                "content": "\t\texpect(result.body).toContain('customer@example.com');"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:155",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 155,
+                "content": "\t});"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:156",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 156,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:157",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 157,
+                "content": "\tit('supports _or filters and limit overrides', async () => {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:158",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 158,
+                "content": "\t\tconst { knex, queryBuilder, savedQueryBuilder } = createKnexMock();"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:159",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 159,
+                "content": "\t\tsavedQueryBuilder.first.mockResolvedValueOnce({"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:160",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 160,
+                "content": "\t\t\tid: 'saved-query-3',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:161",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 161,
+                "content": "\t\t\tcollection: 'support_tickets',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:162",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 162,
+                "content": "\t\t\tname: 'regional-tickets',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:163",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 163,
+                "content": "\t\t\tuser_created: 'user-1',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:164",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 164,
+                "content": "\t\t\tquery: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:165",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 165,
+                "content": "\t\t\t\tfilter: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:166",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 166,
+                "content": "\t\t\t\t\t_or: ["
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:167",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 167,
+                "content": "\t\t\t\t\t\t{ region: { _eq: 'us' } },"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:168",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 168,
+                "content": "\t\t\t\t\t\t{ region: { _eq: 'eu' } },"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:169",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 169,
+                "content": "\t\t\t\t\t],"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:170",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 170,
+                "content": "\t\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:171",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 171,
+                "content": "\t\t\t\tfields: ['id', 'region', 'title'],"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:172",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 172,
+                "content": "\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:173",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 173,
+                "content": "\t\t\tfields: null,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:174",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 174,
+                "content": "\t\t\tformat: 'csv',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:175",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 175,
+                "content": "\t\t\tshared: false,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:176",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 176,
+                "content": "\t\t});"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:177",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 177,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:178",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 178,
+                "content": "\t\tconst service = new SavedQueryExportService({"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:179",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 179,
+                "content": "\t\t\tknex: knex as never,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:180",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 180,
+                "content": "\t\t\taccountability: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:181",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 181,
+                "content": "\t\t\t\tuser: 'user-1',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:182",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 182,
+                "content": "\t\t\t\trole: 'role-1',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:183",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 183,
+                "content": "\t\t\t\troles: ['role-1'],"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:184",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 184,
+                "content": "\t\t\t\tadmin: false,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:185",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 185,
+                "content": "\t\t\t\tapp: false,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:186",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 186,
+                "content": "\t\t\t\tip: null,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:187",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 187,
+                "content": "\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:188",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 188,
+                "content": "\t\t\tschema: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:189",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 189,
+                "content": "\t\t\t\tcollections: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:190",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 190,
+                "content": "\t\t\t\t\tsupport_tickets: {"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:191",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 191,
+                "content": "\t\t\t\t\t\tcollection: 'support_tickets',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:192",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 192,
+                "content": "\t\t\t\t\t\tprimary: 'id',"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:193",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 193,
+                "content": "\t\t\t\t\t\tfields: {},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:194",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 194,
+                "content": "\t\t\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:195",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 195,
+                "content": "\t\t\t\t},"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:196",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 196,
+                "content": "\t\t\t\trelations: [],"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:197",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 197,
+                "content": "\t\t\t} as never,"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:198",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 198,
+                "content": "\t\t});"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:199",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 199,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:200",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 200,
+                "content": "\t\tawait service.exportSavedQuery({ savedQueryId: 'saved-query-3', limit: 100 });"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:201",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 201,
+                "content": ""
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:202",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 202,
+                "content": "\t\texpect(queryBuilder.orWhere).toHaveBeenCalled();"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:203",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 203,
+                "content": "\t\texpect(queryBuilder.limit).toHaveBeenCalledWith(100);"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:204",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 204,
+                "content": "\t});"
+              },
+              {
+                "id": "api/src/services/saved-query-export.test.ts:205",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 205,
+                "content": "});"
+              }
+            ]
+          }
+        ],
+        "additions": 205,
+        "deletions": 0
+      }
+    ],
+    "fileCount": 6,
+    "additions": 513,
+    "deletions": 1
+  },
+  "flaws": [
+    {
+      "id": "flaw-1",
+      "number": 1,
+      "title": "Saved Query Export Bypasses Permission-Aware Query Processing",
+      "prompt": "Does the saved-query export execute through the same permission-aware read path as normal item reads and exports?",
+      "expectedIdentification": "- `identify`: The service reads directly from Knex with `this.knex(collection).select(fields)` and manually applies the saved filter. It never calls `sanitizeQuery`, `ItemsService.readByQuery`, `getAstFromQuery`, or `processAst`. The owner/shared check only controls access to the saved-query record; it does not apply the caller's row permissions, field permissions, relation permissions, dynamic variables, aliases, deep filters, or app/public accountability constraints to the exported collection.\n- `impact`: A user can export fields or rows they cannot normally read if a saved query contains broad fields, relation paths, dynamic filters, or raw field names. Shared saved queries are especially dangerous: the creator's intent gets reused under another user's accountability, but the collection read ignores that user's permissions. Directus users expect exports to obey the same permissions as item reads; this endpoint creates a shadow read API.\n- `fix_direction`: Treat saved queries as stored query input, not executable database plans. Load the saved query, merge allowed overrides, run `sanitizeQuery(..., req.schema, req.accountability)`, then delegate to `ExportService.exportToFile` or `ItemsService.readByQuery` with the current accountability. The existing AST permission pipeline must own filter compilation and field projection.",
+      "expectedImpact": "",
+      "expectedFix": "",
+      "goldenAnswer": "- `identify`: The service reads directly from Knex with `this.knex(collection).select(fields)` and manually applies the saved filter. It never calls `sanitizeQuery`, `ItemsService.readByQuery`, `getAstFromQuery`, or `processAst`. The owner/shared check only controls access to the saved-query record; it does not apply the caller's row permissions, field permissions, relation permissions, dynamic variables, aliases, deep filters, or app/public accountability constraints to the exported collection.\n- `impact`: A user can export fields or rows they cannot normally read if a saved query contains broad fields, relation paths, dynamic filters, or raw field names. Shared saved queries are especially dangerous: the creator's intent gets reused under another user's accountability, but the collection read ignores that user's permissions. Directus users expect exports to obey the same permissions as item reads; this endpoint creates a shadow read API.\n- `fix_direction`: Treat saved queries as stored query input, not executable database plans. Load the saved query, merge allowed overrides, run `sanitizeQuery(..., req.schema, req.accountability)`, then delegate to `ExportService.exportToFile` or `ItemsService.readByQuery` with the current accountability. The existing AST permission pipeline must own filter compilation and field projection.",
+      "hints": [
+        "Separate \"can I access this saved query object?\" from \"can I read the rows this query returns?\"",
+        "Find the line where the collection is read. Is it using ItemsService.readByQuery?",
+        "A hand-written _eq/_or compiler is not Directus' permission-aware query compiler."
+      ]
+    },
+    {
+      "id": "flaw-2",
+      "number": 2,
+      "title": "Export Buffers The Entire Result In Memory And Response Body",
+      "prompt": "What happens when a saved query matches hundreds of thousands of items?",
+      "expectedIdentification": "- `identify`: `exportSavedQuery` awaits all rows, transforms all rows into a single string, stores the entire export in `result.body`, and sends it in the request response. It does not use the existing export batching behavior, temporary file path, background export pattern, or streaming response. `limit: -1` is the default, so large saved queries can load the entire collection.\n- `impact`: Large exports can exhaust Node memory, block the event loop during CSV/JSON serialization, hold DB connections for too long, time out HTTP requests, and make one user's export degrade the API for everyone. This regresses from Directus' existing export service, which pages through `EXPORT_BATCH_SIZE` and appends batches to a temp file.\n- `fix_direction`: Reuse `ExportService.exportToFile` for saved queries, or implement a streaming/batched exporter with cursor/keyset pagination, bounded memory, backpressure, and background notification semantics. The endpoint should return an accepted/background job or streamed file, not build one giant string.",
+      "expectedImpact": "",
+      "expectedFix": "",
+      "goldenAnswer": "- `identify`: `exportSavedQuery` awaits all rows, transforms all rows into a single string, stores the entire export in `result.body`, and sends it in the request response. It does not use the existing export batching behavior, temporary file path, background export pattern, or streaming response. `limit: -1` is the default, so large saved queries can load the entire collection.\n- `impact`: Large exports can exhaust Node memory, block the event loop during CSV/JSON serialization, hold DB connections for too long, time out HTTP requests, and make one user's export degrade the API for everyone. This regresses from Directus' existing export service, which pages through `EXPORT_BATCH_SIZE` and appends batches to a temp file.\n- `fix_direction`: Reuse `ExportService.exportToFile` for saved queries, or implement a streaming/batched exporter with cursor/keyset pagination, bounded memory, backpressure, and background notification semantics. The endpoint should return an accepted/background job or streamed file, not build one giant string.",
+      "hints": [
+        "Compare the new export path to ExportService.exportToFile.",
+        "Look for await rowsQuery and the place CSV/JSON is built.",
+        "A query called \"saved\" can still match millions of rows."
+      ]
+    }
+  ],
+  "debrief": {
+    "raw": "### Correctness Verdict\n\nFor flaw 1, a correct answer must identify that collection reads bypass Directus' permission-aware query pipeline. Answers that only say \"SQL injection risk\" are incomplete unless they connect the direct Knex query to missing row/field/dynamic-permission enforcement.\n\nFor flaw 2, a correct answer must identify full-result buffering. Answers that only say \"exports can be slow\" are incomplete unless they explain that the existing exporter already has a batched design and this PR regresses it.\n\n### Product-Level Change\n\nThe PR adds a convenience workflow: save a collection query once, export it later. The product intent is good. The dangerous part is that \"saved query\" sounds like a small wrapper around export, but the implementation creates a new read engine and a new export engine.\n\n### Changed Contracts\n\n- API contract: `POST /utils/export/saved-query/:id` returns a file response directly.\n- Query contract: stored query JSON is treated as executable filter/projection input.\n- Permission contract: saved-query ownership is checked, but collection read permissions are not applied.\n- Export contract: saved-query exports are synchronous and in-memory, unlike existing background/batched exports.\n- Data contract: a new `directus_saved_queries` table stores collection, query, fields, format, owner, and sharing state.\n\n### Failure Modes\n\nA manager creates a shared saved query for `support_tickets` with fields `id,title,email,internal_notes`. An agent whose role cannot read `email` or `internal_notes` calls the saved-query export. The service checks that the query is shared, then selects those fields directly from Knex and returns them.\n\nA saved query for `orders` uses `limit: -1` and matches 800,000 rows. The service loads every row into memory, then creates a giant CSV string and sends it in one HTTP response. The API process spikes memory, stalls, and can crash before the request completes.\n\n### Reviewer Thought Process\n\nA strong reviewer starts with the existing contract: Directus item reads are not normal SQL reads. They are permission-processed AST reads. Any PR that reads a collection directly must justify why it is outside the item permission model. This one does not have that justification.\n\nThe second move is to compare with the existing exporter. When a codebase already solved batching, temporary files, and notification flow, a new exporter that returns `body: string` should make the reviewer slow down immediately.\n\n### Better Implementation Direction\n\nMake saved-query export a thin wrapper:\n\n- Read the saved-query record with an ownership/share check.\n- Merge caller-approved overrides.\n- Sanitize the resulting query with the caller's accountability.\n- Delegate to `ExportService.exportToFile` or a shared batched export primitive.\n- Preserve the existing background notification behavior for large exports.\n- Add tests that compare saved-query export permissions with normal `ItemsService.readByQuery` permissions.",
+    "productLevelChange": "The PR adds a convenience workflow: save a collection query once, export it later. The product intent is good. The dangerous part is that \"saved query\" sounds like a small wrapper around export, but the implementation creates a new read engine and a new export engine.",
+    "changedContracts": "- API contract: `POST /utils/export/saved-query/:id` returns a file response directly.",
+    "failureModes": "A manager creates a shared saved query for `support_tickets` with fields `id,title,email,internal_notes`. An agent whose role cannot read `email` or `internal_notes` calls the saved-query export. The service checks that the query is shared, then selects those fields directly from Knex and returns them.",
+    "reviewerThoughtProcess": "A strong reviewer starts with the existing contract: Directus item reads are not normal SQL reads. They are permission-processed AST reads. Any PR that reads a collection directly must justify why it is outside the item permission model. This one does not have that justification.",
+    "betterImplementation": "Make saved-query export a thin wrapper:"
+  },
+  "verdictRubric": "For flaw 1, a correct answer must identify that collection reads bypass Directus' permission-aware query pipeline. Answers that only say \"SQL injection risk\" are incomplete unless they connect the direct Knex query to missing row/field/dynamic-permission enforcement.\n\nFor flaw 2, a correct answer must identify full-result buffering. Answers that only say \"exports can be slow\" are incomplete unless they explain that the existing exporter already has a batched design and this PR regresses it.\n\n### Product-Level Change\n\nThe PR adds a convenience workflow: save a collection query once, export it later. The product intent is good. The dangerous part is that \"saved query\" sounds like a small wrapper around export, but the implementation creates a new read engine and a new export engine.\n\n### Changed Contracts\n\n- API contract: `POST /utils/export/saved-query/:id` returns a file response directly.\n- Query contract: stored query JSON is treated as executable filter/projection input.\n- Permission contract: saved-query ownership is checked, but collection read permissions are not applied.\n- Export contract: saved-query exports are synchronous and in-memory, unlike existing background/batched exports.\n- Data contract: a new `directus_saved_queries` table stores collection, query, fields, format, owner, and sharing state.\n\n### Failure Modes\n\nA manager creates a shared saved query for `support_tickets` with fields `id,title,email,internal_notes`. An agent whose role cannot read `email` or `internal_notes` calls the saved-query export. The service checks that the query is shared, then selects those fields directly from Knex and returns them.\n\nA saved query for `orders` uses `limit: -1` and matches 800,000 rows. The service loads every row into memory, then creates a giant CSV string and sends it in one HTTP response. The API process spikes memory, stalls, and can crash before the request completes.\n\n### Reviewer Thought Process\n\nA strong reviewer starts with the existing contract: Directus item reads are not normal SQL reads. They are permission-processed AST reads. Any PR that reads a collection directly must justify why it is outside the item permission model. This one does not have that justification.\n\nThe second move is to compare with the existing exporter. When a codebase already solved batching, temporary files, and notification flow, a new exporter that returns `body: string` should make the reviewer slow down immediately.\n\n### Better Implementation Direction\n\nMake saved-query export a thin wrapper:\n\n- Read the saved-query record with an ownership/share check.\n- Merge caller-approved overrides.\n- Sanitize the resulting query with the caller's accountability.\n- Delegate to `ExportService.exportToFile` or a shared batched export primitive.\n- Preserve the existing background notification behavior for large exports.\n- Add tests that compare saved-query export permissions with normal `ItemsService.readByQuery` permissions."
+}

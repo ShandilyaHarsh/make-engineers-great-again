@@ -1,0 +1,75 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --canvas: 42 40% 97%;
+  --surface: 0 0% 100%;
+  --panel: 220 25% 98%;
+  --ink: 222 29% 11%;
+  --muted: 219 10% 42%;
+  --line: 220 16% 88%;
+  --accent: 214 88% 48%;
+  --accent-ink: 0 0% 100%;
+  --success: 151 55% 36%;
+  --warning: 35 91% 42%;
+  --danger: 4 72% 49%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: hsl(var(--canvas));
+  color: hsl(var(--ink));
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0) 280px),
+    hsl(var(--canvas));
+  overflow-x: hidden;
+}
+
+button,
+a {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+textarea,
+input,
+select {
+  font: inherit;
+}
+
+::selection {
+  background: hsl(var(--accent) / 0.16);
+}
+
+.scrollbar-thin {
+  scrollbar-color: hsl(var(--line)) transparent;
+  scrollbar-width: thin;
+}
+
+.text-balance {
+  text-wrap: balance;
+}
+
+.text-pretty {
+  text-wrap: pretty;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.content-visibility-auto {
+  content-visibility: auto;
+}

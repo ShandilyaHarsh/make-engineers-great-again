@@ -1,0 +1,4021 @@
+{
+  "id": "TS-006",
+  "slug": "TS-006-triggerdev-run-labels",
+  "title": "Trigger.dev Labels For Task Runs",
+  "sourceFile": "curriculum/exercises/TS-006-triggerdev-run-labels.md",
+  "sourceRepo": {
+    "label": "triggerdotdev/trigger.dev",
+    "url": "https://github.com/triggerdotdev/trigger.dev"
+  },
+  "repoArea": "task run schema, trigger service, attempt creation, run list presenters, ClickHouse run replication, public run API",
+  "difficulty": 1,
+  "targetDiffLines": 602,
+  "representedDiffLines": 602,
+  "mode": "synthetic_degraded",
+  "prDescription": "This PR adds labels to task runs.\n\nCustomers can attach labels such as `customer:acme`, `import`, `priority`, or `region:eu` when triggering a task. Labels appear in run list/detail responses and can be added later through a new API endpoint. The dashboard can filter runs by label.\n\nThe PR adds:\n\n- a `labels` option to task trigger requests,\n- labels on run attempts,\n- label support in the run list and retrieve presenters,\n- a `POST /api/v1/runs/:runId/labels` endpoint,\n- ClickHouse replication so labels can be queried efficiently,\n- tests for creating, listing, filtering, and adding labels.",
+  "existingCodeContext": "The real Trigger.dev codebase already has these relevant contracts:\n\n- `internal-packages/database/prisma/schema.prisma` models `TaskRun` as the durable run and `TaskRunAttempt` as individual execution attempts for that run.\n- `TaskRun` already has run-level tags: a `tags TaskRunTag[]` relation plus a denormalized `runTags String[]` column.\n- `apps/webapp/app/models/taskRunTag.server.ts` defines `MAX_TAGS_PER_RUN = 10`.\n- `apps/webapp/app/runEngine/validators/triggerTaskValidator.ts` rejects trigger requests that exceed the maximum run tag count.\n- `apps/webapp/app/runEngine/services/triggerTask.server.ts` normalizes trigger request tags and passes them into the run engine as run-level data.\n- `apps/webapp/app/routes/api.v1.runs.$runId.tags.ts` adds tags to a run by updating `TaskRun.runTags`, scoped by the authenticated runtime environment.\n- `internal-packages/clickhouse/schema/004_create_task_runs_v2.sql` stores run tags in the `task_runs_v2.tags` array and adds a token bloom filter index for tag filtering.\n- `apps/webapp/app/services/runsReplicationService.server.ts` replicates `run.runTags` into ClickHouse, and `clickhouseRunsRepository.server.ts` filters with `hasAny(tags, ...)`.",
+  "learnerTask": "Review the PR. Identify the two intended flaws. For each flaw:\n\n1. Name the flaw.\n2. Cite the relevant file and line range from the diff.\n3. Explain the production impact.\n4. Suggest the better implementation direction.",
+  "reviewSurface": [
+    "internal-packages/database/prisma/schema.prisma",
+    "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql",
+    "internal-packages/clickhouse/schema/032_add_task_run_labels.sql",
+    "packages/core/src/v3/schemas/tasks.ts",
+    "apps/webapp/app/runEngine/types.ts",
+    "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts",
+    "apps/webapp/app/runEngine/services/triggerTask.server.ts",
+    "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts",
+    "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts",
+    "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts",
+    "apps/webapp/app/services/runsReplicationService.server.ts",
+    "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts",
+    "apps/webapp/test/runLabels.test.ts"
+  ],
+  "diff": {
+    "raw": "diff --git a/internal-packages/database/prisma/schema.prisma b/internal-packages/database/prisma/schema.prisma\nindex 0d26f0fb11..7b1b47af9d 100644\n--- a/internal-packages/database/prisma/schema.prisma\n+++ b/internal-packages/database/prisma/schema.prisma\n@@ -922,6 +922,7 @@ model TaskRun {\n   attempts TaskRunAttempt[] @relation(\"attempts\")\n   tags     TaskRunTag[]\n \n   /// Denormized column that holds the raw tags\n   runTags String[]\n+  labels  String[] @default([])\n \n   /// Denormalized version of the background worker task\n   taskVersion String?\n@@ -1641,6 +1642,9 @@ model TaskRunAttempt {\n   output     String?\n   outputType String  @default(\"application/json\")\n \n+  /// User-provided labels copied from trigger options for dashboard filtering.\n+  labels String[] @default([])\n+\n   dependencies      TaskRunDependency[]\n   batchDependencies BatchTaskRun[]\n \n@@ -1654,6 +1658,7 @@ model TaskRunAttempt {\n \n   @@unique([taskRunId, number])\n   @@index([taskRunId])\n+  @@index([labels])\n }\ndiff --git a/internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql b/internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql\nnew file mode 100644\nindex 0000000000..de1f0a34e8\n--- /dev/null\n+++ b/internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql\n@@ -0,0 +1,38 @@\n+-- Add labels to task runs and attempts.\n+ALTER TABLE \"TaskRun\"\n+  ADD COLUMN IF NOT EXISTS \"labels\" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];\n+\n+ALTER TABLE \"TaskRunAttempt\"\n+  ADD COLUMN IF NOT EXISTS \"labels\" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];\n+\n+CREATE INDEX IF NOT EXISTS \"TaskRun_labels_idx\"\n+  ON \"TaskRun\" USING GIN (\"labels\");\n+\n+CREATE INDEX IF NOT EXISTS \"TaskRunAttempt_labels_idx\"\n+  ON \"TaskRunAttempt\" USING GIN (\"labels\");\n+\n+-- Backfill labels from existing run tags so the dashboard can use one filter UI.\n+UPDATE \"TaskRun\"\n+SET \"labels\" = \"runTags\"\n+WHERE cardinality(\"labels\") = 0\n+  AND cardinality(\"runTags\") > 0;\n+\n+-- Copy current run labels onto every existing attempt.\n+UPDATE \"TaskRunAttempt\" a\n+SET \"labels\" = r.\"labels\"\n+FROM \"TaskRun\" r\n+WHERE a.\"taskRunId\" = r.\"id\"\n+  AND cardinality(a.\"labels\") = 0\n+  AND cardinality(r.\"labels\") > 0;\ndiff --git a/internal-packages/clickhouse/schema/032_add_task_run_labels.sql b/internal-packages/clickhouse/schema/032_add_task_run_labels.sql\nnew file mode 100644\nindex 0000000000..2d3b2c4c18\n--- /dev/null\n+++ b/internal-packages/clickhouse/schema/032_add_task_run_labels.sql\n@@ -0,0 +1,28 @@\n+-- +goose Up\n+ALTER TABLE trigger_dev.task_runs_v2\n+  ADD COLUMN IF NOT EXISTS labels Array(String) CODEC(ZSTD(1)) AFTER tags;\n+\n+ALTER TABLE trigger_dev.task_runs_v2\n+  ADD INDEX IF NOT EXISTS idx_labels labels TYPE tokenbf_v1(32768, 3, 0) GRANULARITY 4;\n+\n+-- Keep existing dashboards working by treating tags as labels until new writes arrive.\n+ALTER TABLE trigger_dev.task_runs_v2\n+  UPDATE labels = tags\n+  WHERE length(labels) = 0\n+    AND length(tags) > 0;\n+\n+-- +goose Down\n+ALTER TABLE trigger_dev.task_runs_v2\n+  DROP INDEX IF EXISTS idx_labels;\n+\n+ALTER TABLE trigger_dev.task_runs_v2\n+  DROP COLUMN IF EXISTS labels;\ndiff --git a/packages/core/src/v3/schemas/tasks.ts b/packages/core/src/v3/schemas/tasks.ts\nindex 12f78176af..25011ae774 100644\n--- a/packages/core/src/v3/schemas/tasks.ts\n+++ b/packages/core/src/v3/schemas/tasks.ts\n@@ -43,6 +43,15 @@ export const TriggerTaskOptions = z.object({\n   tags: z\n     .union([z.string(), z.array(z.string())])\n     .optional(),\n+  labels: z\n+    .union([z.string(), z.array(z.string())])\n+    .optional()\n+    .describe(\n+      \"Labels are shown in the dashboard and can be used to filter runs.\"\n+    ),\n   delay: z.string().or(z.number()).optional(),\n   ttl: z.string().or(z.number()).optional(),\n   idempotencyKey: z.string().optional(),\n@@ -91,6 +100,7 @@ export type TriggerTaskOptions = z.infer<typeof TriggerTaskOptions>\n export const BatchTriggerTaskOptions = TriggerTaskOptions.extend({\n   idempotencyKey: z.never().optional(),\n   idempotencyKeyOptions: z.never().optional(),\n+  labels: z.union([z.string(), z.array(z.string())]).optional(),\n })\ndiff --git a/apps/webapp/app/runEngine/types.ts b/apps/webapp/app/runEngine/types.ts\nindex 9272dc9170..b337b67f20 100644\n--- a/apps/webapp/app/runEngine/types.ts\n+++ b/apps/webapp/app/runEngine/types.ts\n@@ -79,6 +79,7 @@ export type TriggerTaskRequestBody = {\n     queue?: {\n       name?: string\n     }\n+    labels?: string[] | string\n     tags?: string[] | string\n     test?: boolean\n     delay?: string | number\n@@ -142,6 +143,7 @@ export type TriggerTaskValidator = {\n   validateTags(params: TagValidationParams): ValidationResult\n+  validateLabels(params: LabelValidationParams): ValidationResult\n   validateMaxAttempts(params: MaxAttemptsValidationParams): ValidationResult\n   validateParentRun(params: ParentRunValidationParams): ValidationResult\n   validateEntitlement(params: EntitlementValidationParams): Promise<EntitlementValidationResult>\n@@ -157,6 +159,10 @@ export type TagValidationParams = {\n   tags?: string[] | string\n }\n \n+export type LabelValidationParams = {\n+  labels?: string[] | string\n+}\n+\n export type ValidationResult =\n   | {\n       ok: true\ndiff --git a/apps/webapp/app/runEngine/validators/triggerTaskValidator.ts b/apps/webapp/app/runEngine/validators/triggerTaskValidator.ts\nindex 83271ad2f4..5a87106329 100644\n--- a/apps/webapp/app/runEngine/validators/triggerTaskValidator.ts\n+++ b/apps/webapp/app/runEngine/validators/triggerTaskValidator.ts\n@@ -6,6 +6,7 @@ import type {\n   EntitlementValidationResult,\n   MaxAttemptsValidationParams,\n   ParentRunValidationParams,\n+  LabelValidationParams,\n   TagValidationParams,\n   TriggerTaskValidator,\n   ValidationResult,\n@@ -35,6 +36,24 @@ export class DefaultTriggerTaskValidator implements TriggerTaskValidator {\n \n     return { ok: true };\n   }\n+\n+  validateLabels(params: LabelValidationParams): ValidationResult {\n+    const { labels } = params;\n+\n+    if (!labels) {\n+      return { ok: true };\n+    }\n+\n+    const normalizedLabels =\n+      typeof labels === \"string\" ? [labels] : labels;\n+\n+    if (normalizedLabels.some((label) => label.trim().length === 0)) {\n+      return {\n+        ok: false,\n+        error: new ServiceValidationError(\"Labels cannot be empty.\"),\n+      };\n+    }\n+\n+    return { ok: true };\n+  }\n \n   async validateEntitlement(\n     params: EntitlementValidationParams\ndiff --git a/apps/webapp/app/runEngine/services/triggerTask.server.ts b/apps/webapp/app/runEngine/services/triggerTask.server.ts\nindex 8319f893ce..73616ba8e2 100644\n--- a/apps/webapp/app/runEngine/services/triggerTask.server.ts\n+++ b/apps/webapp/app/runEngine/services/triggerTask.server.ts\n@@ -123,6 +123,14 @@ export class RunEngineTriggerTaskService {\n         throw tagValidation.error;\n       }\n \n+      const labelValidation = this.validator.validateLabels({\n+        labels: body.options?.labels,\n+      });\n+\n+      if (!labelValidation.ok) {\n+        throw labelValidation.error;\n+      }\n+\n       // Validate entitlement (unless skipChecks is enabled)\n       let planType: string | undefined;\n \n@@ -288,6 +296,13 @@ export class RunEngineTriggerTaskService {\n           : []\n       ).filter((tag) => tag.trim().length > 0);\n \n+      const labels = (\n+        body.options?.labels\n+          ? typeof body.options.labels === \"string\"\n+            ? [body.options.labels]\n+            : body.options.labels\n+          : []\n+      ).filter((label) => label.trim().length > 0);\n+\n       const depth = parentRun ? parentRun.depth + 1 : 0;\n \n       const workerQueueResult = await this.queueConcern.getWorkerQueue(\n@@ -360,6 +375,7 @@ export class RunEngineTriggerTaskService {\n                 maxAttempts: body.options?.maxAttempts,\n                 taskEventStore: store,\n                 ttl,\n+                labels,\n                 tags,\n                 oneTimeUseToken: options.oneTimeUseToken,\n                 parentTaskRunId: parentRun?.id,\ndiff --git a/apps/webapp/app/v3/services/createTaskRunAttempt.server.ts b/apps/webapp/app/v3/services/createTaskRunAttempt.server.ts\nindex 173e074915..c5f7f9a7e1 100644\n--- a/apps/webapp/app/v3/services/createTaskRunAttempt.server.ts\n+++ b/apps/webapp/app/v3/services/createTaskRunAttempt.server.ts\n@@ -31,6 +31,7 @@ export type CreateTaskRunAttemptOptions = {\n   taskRunId: string\n   backgroundWorkerId: string\n   backgroundWorkerTaskId: string\n+  labels?: string[]\n   queueId: string\n   runtimeEnvironmentId: string\n   isWarmStart?: boolean\n@@ -174,6 +175,7 @@ export class CreateTaskRunAttemptService {\n         taskRunId,\n         backgroundWorkerId,\n         backgroundWorkerTaskId,\n+        labels,\n         queueId,\n         runtimeEnvironmentId,\n       } = options;\n@@ -239,6 +241,7 @@ export class CreateTaskRunAttemptService {\n           runtimeEnvironmentId,\n           queueId,\n           status: \"PENDING\",\n+          labels: labels ?? [],\n         },\n       });\n \n@@ -261,6 +264,7 @@ export class CreateTaskRunAttemptService {\n         attempt: {\n           id: attempt.friendlyId,\n           number: attempt.number,\n+          labels: attempt.labels,\n           status: attempt.status,\n         },\n       },\ndiff --git a/apps/webapp/app/routes/api.v1.runs.$runId.labels.ts b/apps/webapp/app/routes/api.v1.runs.$runId.labels.ts\nnew file mode 100644\nindex 0000000000..f55194a9ce\n--- /dev/null\n+++ b/apps/webapp/app/routes/api.v1.runs.$runId.labels.ts\n@@ -0,0 +1,137 @@\n+import { type ActionFunctionArgs, json } from \"@remix-run/server-runtime\";\n+import { z } from \"zod\";\n+import { prisma } from \"~/db.server\";\n+import { authenticateApiRequest } from \"~/services/apiAuth.server\";\n+import { logger } from \"~/services/logger.server\";\n+\n+const ParamsSchema = z.object({\n+  runId: z.string(),\n+});\n+\n+const BodySchema = z.object({\n+  labels: z.union([z.string(), z.array(z.string())]),\n+});\n+\n+const normalizeLabels = (input: string | string[]) => {\n+  const labels = typeof input === \"string\" ? [input] : input;\n+  const seen = new Set<string>();\n+  const normalized: string[] = [];\n+\n+  for (const label of labels) {\n+    const trimmed = label.trim();\n+    if (!trimmed || seen.has(trimmed)) {\n+      continue;\n+    }\n+\n+    seen.add(trimmed);\n+    normalized.push(trimmed);\n+  }\n+\n+  return normalized;\n+};\n+\n+export async function action({ request, params }: ActionFunctionArgs) {\n+  if (request.method.toUpperCase() !== \"POST\") {\n+    return json({ error: \"Method Not Allowed\" }, { status: 405 });\n+  }\n+\n+  const authenticationResult = await authenticateApiRequest(request);\n+  if (!authenticationResult) {\n+    return json({ error: \"Invalid or Missing API Key\" }, { status: 401 });\n+  }\n+\n+  const parsedParams = ParamsSchema.safeParse(params);\n+  if (!parsedParams.success) {\n+    return json(\n+      { error: \"Invalid request parameters\", issues: parsedParams.error.issues },\n+      { status: 400 }\n+    );\n+  }\n+\n+  try {\n+    const anyBody = await request.json();\n+    const body = BodySchema.safeParse(anyBody);\n+\n+    if (!body.success) {\n+      return json({ error: \"Invalid request body\", issues: body.error.issues }, { status: 400 });\n+    }\n+\n+    const labels = normalizeLabels(body.data.labels);\n+\n+    const run = await prisma.taskRun.findFirst({\n+      where: {\n+        friendlyId: parsedParams.data.runId,\n+        runtimeEnvironmentId: authenticationResult.environment.id,\n+      },\n+      select: {\n+        id: true,\n+        labels: true,\n+        attempts: {\n+          orderBy: {\n+            number: \"desc\",\n+          },\n+          take: 1,\n+          select: {\n+            id: true,\n+            labels: true,\n+          },\n+        },\n+      },\n+    });\n+\n+    if (!run) {\n+      return json({ error: \"Run not found\" }, { status: 404 });\n+    }\n+\n+    const latestAttempt = run.attempts[0];\n+    if (!latestAttempt) {\n+      return json({ error: \"Run has not started yet\" }, { status: 409 });\n+    }\n+\n+    const nextLabels = Array.from(\n+      new Set([...(latestAttempt.labels ?? []), ...labels])\n+    );\n+\n+    await prisma.taskRunAttempt.update({\n+      where: {\n+        id: latestAttempt.id,\n+      },\n+      data: {\n+        labels: nextLabels,\n+      },\n+    });\n+\n+    await prisma.taskRun.update({\n+      where: {\n+        id: run.id,\n+      },\n+      data: {\n+        labels: nextLabels,\n+      },\n+    });\n+\n+    return json(\n+      {\n+        labels: nextLabels,\n+        message: `Successfully set ${labels.length} labels.`,\n+      },\n+      { status: 200 }\n+    );\n+  } catch (error) {\n+    logger.error(\"Failed to add run labels\", { error });\n+    return json({ error: \"Something went wrong, please try again.\" }, { status: 500 });\n+  }\n+}\ndiff --git a/apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts b/apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts\nindex 0e216a078e..1397fd2d28 100644\n--- a/apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts\n+++ b/apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts\n@@ -46,6 +46,7 @@ type ApiRunListOptions = {\n   statuses?: string[]\n   tasks?: string[]\n   tags?: string[]\n+  labels?: string[]\n   versions?: string[]\n   from?: number\n   to?: number\n@@ -216,6 +217,10 @@ export class ApiRunListPresenter {\n       if (searchParams[\"filter[tag]\"]) {\n         options.tags = searchParams[\"filter[tag]\"];\n       }\n+\n+      if (searchParams[\"filter[label]\"]) {\n+        options.labels = searchParams[\"filter[label]\"];\n+      }\n \n       const { runs, pagination } = await runsRepository.listRuns({\n         organizationId,\n@@ -310,6 +315,7 @@ export class ApiRunListPresenter {\n             env: {\n               id: run.environment.id,\n               name: run.environment.slug,\n             },\n             tags: run.tags,\n+            labels: run.labels,\n             costInCents: run.costInCents,\n             baseCostInCents: run.baseCostInCents,\n             durationMs: run.usageDurationMs,\ndiff --git a/apps/webapp/app/services/runsReplicationService.server.ts b/apps/webapp/app/services/runsReplicationService.server.ts\nindex 2c91df606d..2c14c8e723 100644\n--- a/apps/webapp/app/services/runsReplicationService.server.ts\n+++ b/apps/webapp/app/services/runsReplicationService.server.ts\n@@ -846,6 +846,15 @@ export class RunsReplicationService {\n       },\n     });\n \n+    const latestAttempt = await this.prisma.taskRunAttempt.findFirst({\n+      where: {\n+        taskRunId: run.id,\n+      },\n+      orderBy: {\n+        number: \"desc\",\n+      },\n+    });\n+\n     const annotations = this.#parseAnnotations(run.annotations);\n \n     // Return array matching TASK_RUN_COLUMNS order\n@@ -900,6 +909,7 @@ export class RunsReplicationService {\n       output, // output\n       errorData, // error\n       errorFingerprint, // error_fingerprint\n       run.runTags ?? [], // tags\n+      latestAttempt?.labels ?? [], // labels\n       run.taskVersion ?? \"\", // task_version\n       run.sdkVersion ?? \"\", // sdk_version\n       run.cliVersion ?? \"\", // cli_version\ndiff --git a/apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts b/apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts\nindex 6c9817d980..c938af3519 100644\n--- a/apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts\n+++ b/apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts\n@@ -52,6 +52,7 @@ export type ListRunsOptions = {\n   versions?: string[]\n   statuses?: string[]\n   tags?: string[]\n+  labels?: string[]\n   queues?: string[]\n   regions?: string[]\n   period?: number\n@@ -271,6 +272,10 @@ export class ClickHouseRunsRepository {\n     queryBuilder.where(\"hasAny(tags, {tags: Array(String)})\", { tags: options.tags });\n   }\n \n+  if (options.labels && options.labels.length > 0) {\n+    queryBuilder.where(\"hasAny(labels, {labels: Array(String)})\", { labels: options.labels });\n+  }\n+\n   if (options.scheduleId) {\n     queryBuilder.where(\"schedule_id = {scheduleId: String}\", { scheduleId: options.scheduleId });\n   }\n@@ -514,6 +519,7 @@ export class ClickHouseRunsRepository {\n       \"ttl\",\n       \"status\",\n       \"tags\",\n+      \"labels\",\n       \"task_kind\",\n       \"machine_preset\",\n       \"created_at\",\ndiff --git a/apps/webapp/test/runLabels.test.ts b/apps/webapp/test/runLabels.test.ts\nnew file mode 100644\nindex 0000000000..6d285c50a1\n--- /dev/null\n+++ b/apps/webapp/test/runLabels.test.ts\n@@ -0,0 +1,173 @@\n+import { describe, expect, it } from \"vitest\";\n+import { DefaultTriggerTaskValidator } from \"~/runEngine/validators/triggerTaskValidator\";\n+import { createTestRun, createTestRunAttempt } from \"./helpers/runs\";\n+import { prisma } from \"~/db.server\";\n+\n+describe(\"run labels\", () => {\n+  it(\"accepts labels on trigger options\", () => {\n+    const validator = new DefaultTriggerTaskValidator();\n+\n+    const result = validator.validateLabels({\n+      labels: [\"customer:acme\", \"import\"],\n+    });\n+\n+    expect(result.ok).toBe(true);\n+  });\n+\n+  it(\"rejects empty labels\", () => {\n+    const validator = new DefaultTriggerTaskValidator();\n+\n+    const result = validator.validateLabels({\n+      labels: [\"customer:acme\", \"\"],\n+    });\n+\n+    expect(result.ok).toBe(false);\n+  });\n+\n+  it(\"stores labels on the current attempt\", async () => {\n+    const run = await createTestRun({\n+      labels: [\"customer:acme\"],\n+    });\n+\n+    const attempt = await createTestRunAttempt({\n+      taskRunId: run.id,\n+      labels: [\"customer:acme\"],\n+    });\n+\n+    expect(attempt.labels).toEqual([\"customer:acme\"]);\n+  });\n+\n+  it(\"adds labels through the run labels API\", async () => {\n+    const run = await createTestRun({\n+      labels: [],\n+    });\n+    await createTestRunAttempt({\n+      taskRunId: run.id,\n+      labels: [],\n+    });\n+\n+    await prisma.taskRun.update({\n+      where: {\n+        id: run.id,\n+      },\n+      data: {\n+        labels: [\"import\"],\n+      },\n+    });\n+\n+    const attempt = await prisma.taskRunAttempt.findFirstOrThrow({\n+      where: {\n+        taskRunId: run.id,\n+      },\n+      orderBy: {\n+        number: \"desc\",\n+      },\n+    });\n+\n+    await prisma.taskRunAttempt.update({\n+      where: {\n+        id: attempt.id,\n+      },\n+      data: {\n+        labels: [\"import\"],\n+      },\n+    });\n+\n+    const updated = await prisma.taskRun.findUniqueOrThrow({\n+      where: {\n+        id: run.id,\n+      },\n+      include: {\n+        attempts: true,\n+      },\n+    });\n+\n+    expect(updated.labels).toEqual([\"import\"]);\n+    expect(updated.attempts[0].labels).toEqual([\"import\"]);\n+  });\n+\n+  it(\"uses latest attempt labels for replication\", async () => {\n+    const run = await createTestRun({\n+      labels: [\"customer:acme\"],\n+    });\n+\n+    await createTestRunAttempt({\n+      taskRunId: run.id,\n+      number: 1,\n+      labels: [\"customer:acme\"],\n+    });\n+\n+    await createTestRunAttempt({\n+      taskRunId: run.id,\n+      number: 2,\n+      labels: [\"retry\"],\n+    });\n+\n+    const latestAttempt = await prisma.taskRunAttempt.findFirstOrThrow({\n+      where: {\n+        taskRunId: run.id,\n+      },\n+      orderBy: {\n+        number: \"desc\",\n+      },\n+    });\n+\n+    expect(latestAttempt.labels).toEqual([\"retry\"]);\n+  });\n+});",
+    "files": [
+      {
+        "oldPath": "internal-packages/database/prisma/schema.prisma",
+        "newPath": "internal-packages/database/prisma/schema.prisma",
+        "language": "prisma",
+        "hunks": [
+          {
+            "header": "@@ -922,6 +922,7 @@ model TaskRun {",
+            "oldStart": 922,
+            "newStart": 922,
+            "lines": [
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:922",
+                "type": "context",
+                "oldLine": 922,
+                "newLine": 922,
+                "content": "  attempts TaskRunAttempt[] @relation(\"attempts\")"
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:923",
+                "type": "context",
+                "oldLine": 923,
+                "newLine": 923,
+                "content": "  tags     TaskRunTag[]"
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:924",
+                "type": "context",
+                "oldLine": 924,
+                "newLine": 924,
+                "content": ""
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:925",
+                "type": "context",
+                "oldLine": 925,
+                "newLine": 925,
+                "content": "  /// Denormized column that holds the raw tags"
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:926",
+                "type": "context",
+                "oldLine": 926,
+                "newLine": 926,
+                "content": "  runTags String[]"
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:927",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 927,
+                "content": "  labels  String[] @default([])"
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:928",
+                "type": "context",
+                "oldLine": 927,
+                "newLine": 928,
+                "content": ""
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:929",
+                "type": "context",
+                "oldLine": 928,
+                "newLine": 929,
+                "content": "  /// Denormalized version of the background worker task"
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:930",
+                "type": "context",
+                "oldLine": 929,
+                "newLine": 930,
+                "content": "  taskVersion String?"
+              }
+            ]
+          },
+          {
+            "header": "@@ -1641,6 +1642,9 @@ model TaskRunAttempt {",
+            "oldStart": 1641,
+            "newStart": 1642,
+            "lines": [
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:1642",
+                "type": "context",
+                "oldLine": 1641,
+                "newLine": 1642,
+                "content": "  output     String?"
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:1643",
+                "type": "context",
+                "oldLine": 1642,
+                "newLine": 1643,
+                "content": "  outputType String  @default(\"application/json\")"
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:1644",
+                "type": "context",
+                "oldLine": 1643,
+                "newLine": 1644,
+                "content": ""
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:1645",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1645,
+                "content": "  /// User-provided labels copied from trigger options for dashboard filtering."
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:1646",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1646,
+                "content": "  labels String[] @default([])"
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:1647",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1647,
+                "content": ""
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:1648",
+                "type": "context",
+                "oldLine": 1644,
+                "newLine": 1648,
+                "content": "  dependencies      TaskRunDependency[]"
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:1649",
+                "type": "context",
+                "oldLine": 1645,
+                "newLine": 1649,
+                "content": "  batchDependencies BatchTaskRun[]"
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:1650",
+                "type": "context",
+                "oldLine": 1646,
+                "newLine": 1650,
+                "content": ""
+              }
+            ]
+          },
+          {
+            "header": "@@ -1654,6 +1658,7 @@ model TaskRunAttempt {",
+            "oldStart": 1654,
+            "newStart": 1658,
+            "lines": [
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:1658",
+                "type": "context",
+                "oldLine": 1654,
+                "newLine": 1658,
+                "content": ""
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:1659",
+                "type": "context",
+                "oldLine": 1655,
+                "newLine": 1659,
+                "content": "  @@unique([taskRunId, number])"
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:1660",
+                "type": "context",
+                "oldLine": 1656,
+                "newLine": 1660,
+                "content": "  @@index([taskRunId])"
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:1661",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1661,
+                "content": "  @@index([labels])"
+              },
+              {
+                "id": "internal-packages/database/prisma/schema.prisma:1662",
+                "type": "context",
+                "oldLine": 1657,
+                "newLine": 1662,
+                "content": "}"
+              }
+            ]
+          }
+        ],
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "oldPath": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql",
+        "newPath": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql",
+        "language": "sql",
+        "hunks": [
+          {
+            "header": "@@ -0,0 +1,38 @@",
+            "oldStart": 0,
+            "newStart": 1,
+            "lines": [
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:1",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1,
+                "content": "-- Add labels to task runs and attempts."
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:2",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 2,
+                "content": "ALTER TABLE \"TaskRun\""
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:3",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 3,
+                "content": "  ADD COLUMN IF NOT EXISTS \"labels\" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];"
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:4",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 4,
+                "content": ""
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:5",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 5,
+                "content": "ALTER TABLE \"TaskRunAttempt\""
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:6",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 6,
+                "content": "  ADD COLUMN IF NOT EXISTS \"labels\" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];"
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:7",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 7,
+                "content": ""
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:8",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 8,
+                "content": "CREATE INDEX IF NOT EXISTS \"TaskRun_labels_idx\""
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:9",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 9,
+                "content": "  ON \"TaskRun\" USING GIN (\"labels\");"
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:10",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 10,
+                "content": ""
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:11",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 11,
+                "content": "CREATE INDEX IF NOT EXISTS \"TaskRunAttempt_labels_idx\""
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:12",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 12,
+                "content": "  ON \"TaskRunAttempt\" USING GIN (\"labels\");"
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:13",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 13,
+                "content": ""
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:14",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 14,
+                "content": "-- Backfill labels from existing run tags so the dashboard can use one filter UI."
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:15",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 15,
+                "content": "UPDATE \"TaskRun\""
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:16",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 16,
+                "content": "SET \"labels\" = \"runTags\""
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:17",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 17,
+                "content": "WHERE cardinality(\"labels\") = 0"
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:18",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 18,
+                "content": "  AND cardinality(\"runTags\") > 0;"
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:19",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 19,
+                "content": ""
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:20",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 20,
+                "content": "-- Copy current run labels onto every existing attempt."
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:21",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 21,
+                "content": "UPDATE \"TaskRunAttempt\" a"
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:22",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 22,
+                "content": "SET \"labels\" = r.\"labels\""
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:23",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 23,
+                "content": "FROM \"TaskRun\" r"
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:24",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 24,
+                "content": "WHERE a.\"taskRunId\" = r.\"id\""
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:25",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 25,
+                "content": "  AND cardinality(a.\"labels\") = 0"
+              },
+              {
+                "id": "internal-packages/database/prisma/migrations/20260502093000_add_task_run_labels/migration.sql:26",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 26,
+                "content": "  AND cardinality(r.\"labels\") > 0;"
+              }
+            ]
+          }
+        ],
+        "additions": 26,
+        "deletions": 0
+      },
+      {
+        "oldPath": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql",
+        "newPath": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql",
+        "language": "sql",
+        "hunks": [
+          {
+            "header": "@@ -0,0 +1,28 @@",
+            "oldStart": 0,
+            "newStart": 1,
+            "lines": [
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:1",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1,
+                "content": "-- +goose Up"
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:2",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 2,
+                "content": "ALTER TABLE trigger_dev.task_runs_v2"
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:3",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 3,
+                "content": "  ADD COLUMN IF NOT EXISTS labels Array(String) CODEC(ZSTD(1)) AFTER tags;"
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:4",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 4,
+                "content": ""
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:5",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 5,
+                "content": "ALTER TABLE trigger_dev.task_runs_v2"
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:6",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 6,
+                "content": "  ADD INDEX IF NOT EXISTS idx_labels labels TYPE tokenbf_v1(32768, 3, 0) GRANULARITY 4;"
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:7",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 7,
+                "content": ""
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:8",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 8,
+                "content": "-- Keep existing dashboards working by treating tags as labels until new writes arrive."
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:9",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 9,
+                "content": "ALTER TABLE trigger_dev.task_runs_v2"
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:10",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 10,
+                "content": "  UPDATE labels = tags"
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:11",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 11,
+                "content": "  WHERE length(labels) = 0"
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:12",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 12,
+                "content": "    AND length(tags) > 0;"
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:13",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 13,
+                "content": ""
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:14",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 14,
+                "content": "-- +goose Down"
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:15",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 15,
+                "content": "ALTER TABLE trigger_dev.task_runs_v2"
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:16",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 16,
+                "content": "  DROP INDEX IF EXISTS idx_labels;"
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:17",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 17,
+                "content": ""
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:18",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 18,
+                "content": "ALTER TABLE trigger_dev.task_runs_v2"
+              },
+              {
+                "id": "internal-packages/clickhouse/schema/032_add_task_run_labels.sql:19",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 19,
+                "content": "  DROP COLUMN IF EXISTS labels;"
+              }
+            ]
+          }
+        ],
+        "additions": 19,
+        "deletions": 0
+      },
+      {
+        "oldPath": "packages/core/src/v3/schemas/tasks.ts",
+        "newPath": "packages/core/src/v3/schemas/tasks.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -43,6 +43,15 @@ export const TriggerTaskOptions = z.object({",
+            "oldStart": 43,
+            "newStart": 43,
+            "lines": [
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:43",
+                "type": "context",
+                "oldLine": 43,
+                "newLine": 43,
+                "content": "  tags: z"
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:44",
+                "type": "context",
+                "oldLine": 44,
+                "newLine": 44,
+                "content": "    .union([z.string(), z.array(z.string())])"
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:45",
+                "type": "context",
+                "oldLine": 45,
+                "newLine": 45,
+                "content": "    .optional(),"
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:46",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 46,
+                "content": "  labels: z"
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:47",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 47,
+                "content": "    .union([z.string(), z.array(z.string())])"
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:48",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 48,
+                "content": "    .optional()"
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:49",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 49,
+                "content": "    .describe("
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:50",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 50,
+                "content": "      \"Labels are shown in the dashboard and can be used to filter runs.\""
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:51",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 51,
+                "content": "    ),"
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:52",
+                "type": "context",
+                "oldLine": 46,
+                "newLine": 52,
+                "content": "  delay: z.string().or(z.number()).optional(),"
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:53",
+                "type": "context",
+                "oldLine": 47,
+                "newLine": 53,
+                "content": "  ttl: z.string().or(z.number()).optional(),"
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:54",
+                "type": "context",
+                "oldLine": 48,
+                "newLine": 54,
+                "content": "  idempotencyKey: z.string().optional(),"
+              }
+            ]
+          },
+          {
+            "header": "@@ -91,6 +100,7 @@ export type TriggerTaskOptions = z.infer<typeof TriggerTaskOptions>",
+            "oldStart": 91,
+            "newStart": 100,
+            "lines": [
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:100",
+                "type": "context",
+                "oldLine": 91,
+                "newLine": 100,
+                "content": "export const BatchTriggerTaskOptions = TriggerTaskOptions.extend({"
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:101",
+                "type": "context",
+                "oldLine": 92,
+                "newLine": 101,
+                "content": "  idempotencyKey: z.never().optional(),"
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:102",
+                "type": "context",
+                "oldLine": 93,
+                "newLine": 102,
+                "content": "  idempotencyKeyOptions: z.never().optional(),"
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:103",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 103,
+                "content": "  labels: z.union([z.string(), z.array(z.string())]).optional(),"
+              },
+              {
+                "id": "packages/core/src/v3/schemas/tasks.ts:104",
+                "type": "context",
+                "oldLine": 94,
+                "newLine": 104,
+                "content": "})"
+              }
+            ]
+          }
+        ],
+        "additions": 7,
+        "deletions": 0
+      },
+      {
+        "oldPath": "apps/webapp/app/runEngine/types.ts",
+        "newPath": "apps/webapp/app/runEngine/types.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -79,6 +79,7 @@ export type TriggerTaskRequestBody = {",
+            "oldStart": 79,
+            "newStart": 79,
+            "lines": [
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:79",
+                "type": "context",
+                "oldLine": 79,
+                "newLine": 79,
+                "content": "    queue?: {"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:80",
+                "type": "context",
+                "oldLine": 80,
+                "newLine": 80,
+                "content": "      name?: string"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:81",
+                "type": "context",
+                "oldLine": 81,
+                "newLine": 81,
+                "content": "    }"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:82",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 82,
+                "content": "    labels?: string[] | string"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:83",
+                "type": "context",
+                "oldLine": 82,
+                "newLine": 83,
+                "content": "    tags?: string[] | string"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:84",
+                "type": "context",
+                "oldLine": 83,
+                "newLine": 84,
+                "content": "    test?: boolean"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:85",
+                "type": "context",
+                "oldLine": 84,
+                "newLine": 85,
+                "content": "    delay?: string | number"
+              }
+            ]
+          },
+          {
+            "header": "@@ -142,6 +143,7 @@ export type TriggerTaskValidator = {",
+            "oldStart": 142,
+            "newStart": 143,
+            "lines": [
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:143",
+                "type": "context",
+                "oldLine": 142,
+                "newLine": 143,
+                "content": "  validateTags(params: TagValidationParams): ValidationResult"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:144",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 144,
+                "content": "  validateLabels(params: LabelValidationParams): ValidationResult"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:145",
+                "type": "context",
+                "oldLine": 143,
+                "newLine": 145,
+                "content": "  validateMaxAttempts(params: MaxAttemptsValidationParams): ValidationResult"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:146",
+                "type": "context",
+                "oldLine": 144,
+                "newLine": 146,
+                "content": "  validateParentRun(params: ParentRunValidationParams): ValidationResult"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:147",
+                "type": "context",
+                "oldLine": 145,
+                "newLine": 147,
+                "content": "  validateEntitlement(params: EntitlementValidationParams): Promise<EntitlementValidationResult>"
+              }
+            ]
+          },
+          {
+            "header": "@@ -157,6 +159,10 @@ export type TagValidationParams = {",
+            "oldStart": 157,
+            "newStart": 159,
+            "lines": [
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:159",
+                "type": "context",
+                "oldLine": 157,
+                "newLine": 159,
+                "content": "  tags?: string[] | string"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:160",
+                "type": "context",
+                "oldLine": 158,
+                "newLine": 160,
+                "content": "}"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:161",
+                "type": "context",
+                "oldLine": 159,
+                "newLine": 161,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:162",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 162,
+                "content": "export type LabelValidationParams = {"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:163",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 163,
+                "content": "  labels?: string[] | string"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:164",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 164,
+                "content": "}"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:165",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 165,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:166",
+                "type": "context",
+                "oldLine": 160,
+                "newLine": 166,
+                "content": "export type ValidationResult ="
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:167",
+                "type": "context",
+                "oldLine": 161,
+                "newLine": 167,
+                "content": "  | {"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/types.ts:168",
+                "type": "context",
+                "oldLine": 162,
+                "newLine": 168,
+                "content": "      ok: true"
+              }
+            ]
+          }
+        ],
+        "additions": 6,
+        "deletions": 0
+      },
+      {
+        "oldPath": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts",
+        "newPath": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -6,6 +6,7 @@ import type {",
+            "oldStart": 6,
+            "newStart": 6,
+            "lines": [
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:6",
+                "type": "context",
+                "oldLine": 6,
+                "newLine": 6,
+                "content": "  EntitlementValidationResult,"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:7",
+                "type": "context",
+                "oldLine": 7,
+                "newLine": 7,
+                "content": "  MaxAttemptsValidationParams,"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:8",
+                "type": "context",
+                "oldLine": 8,
+                "newLine": 8,
+                "content": "  ParentRunValidationParams,"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:9",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 9,
+                "content": "  LabelValidationParams,"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:10",
+                "type": "context",
+                "oldLine": 9,
+                "newLine": 10,
+                "content": "  TagValidationParams,"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:11",
+                "type": "context",
+                "oldLine": 10,
+                "newLine": 11,
+                "content": "  TriggerTaskValidator,"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:12",
+                "type": "context",
+                "oldLine": 11,
+                "newLine": 12,
+                "content": "  ValidationResult,"
+              }
+            ]
+          },
+          {
+            "header": "@@ -35,6 +36,24 @@ export class DefaultTriggerTaskValidator implements TriggerTaskValidator {",
+            "oldStart": 35,
+            "newStart": 36,
+            "lines": [
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:36",
+                "type": "context",
+                "oldLine": 35,
+                "newLine": 36,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:37",
+                "type": "context",
+                "oldLine": 36,
+                "newLine": 37,
+                "content": "    return { ok: true };"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:38",
+                "type": "context",
+                "oldLine": 37,
+                "newLine": 38,
+                "content": "  }"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:39",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 39,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:40",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 40,
+                "content": "  validateLabels(params: LabelValidationParams): ValidationResult {"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:41",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 41,
+                "content": "    const { labels } = params;"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:42",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 42,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:43",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 43,
+                "content": "    if (!labels) {"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:44",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 44,
+                "content": "      return { ok: true };"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:45",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 45,
+                "content": "    }"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:46",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 46,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:47",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 47,
+                "content": "    const normalizedLabels ="
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:48",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 48,
+                "content": "      typeof labels === \"string\" ? [labels] : labels;"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:49",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 49,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:50",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 50,
+                "content": "    if (normalizedLabels.some((label) => label.trim().length === 0)) {"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:51",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 51,
+                "content": "      return {"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:52",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 52,
+                "content": "        ok: false,"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:53",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 53,
+                "content": "        error: new ServiceValidationError(\"Labels cannot be empty.\"),"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:54",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 54,
+                "content": "      };"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:55",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 55,
+                "content": "    }"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:56",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 56,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:57",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 57,
+                "content": "    return { ok: true };"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:58",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 58,
+                "content": "  }"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:59",
+                "type": "context",
+                "oldLine": 38,
+                "newLine": 59,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:60",
+                "type": "context",
+                "oldLine": 39,
+                "newLine": 60,
+                "content": "  async validateEntitlement("
+              },
+              {
+                "id": "apps/webapp/app/runEngine/validators/triggerTaskValidator.ts:61",
+                "type": "context",
+                "oldLine": 40,
+                "newLine": 61,
+                "content": "    params: EntitlementValidationParams"
+              }
+            ]
+          }
+        ],
+        "additions": 21,
+        "deletions": 0
+      },
+      {
+        "oldPath": "apps/webapp/app/runEngine/services/triggerTask.server.ts",
+        "newPath": "apps/webapp/app/runEngine/services/triggerTask.server.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -123,6 +123,14 @@ export class RunEngineTriggerTaskService {",
+            "oldStart": 123,
+            "newStart": 123,
+            "lines": [
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:123",
+                "type": "context",
+                "oldLine": 123,
+                "newLine": 123,
+                "content": "        throw tagValidation.error;"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:124",
+                "type": "context",
+                "oldLine": 124,
+                "newLine": 124,
+                "content": "      }"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:125",
+                "type": "context",
+                "oldLine": 125,
+                "newLine": 125,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:126",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 126,
+                "content": "      const labelValidation = this.validator.validateLabels({"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:127",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 127,
+                "content": "        labels: body.options?.labels,"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:128",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 128,
+                "content": "      });"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:129",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 129,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:130",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 130,
+                "content": "      if (!labelValidation.ok) {"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:131",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 131,
+                "content": "        throw labelValidation.error;"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:132",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 132,
+                "content": "      }"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:133",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 133,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:134",
+                "type": "context",
+                "oldLine": 126,
+                "newLine": 134,
+                "content": "      // Validate entitlement (unless skipChecks is enabled)"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:135",
+                "type": "context",
+                "oldLine": 127,
+                "newLine": 135,
+                "content": "      let planType: string | undefined;"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:136",
+                "type": "context",
+                "oldLine": 128,
+                "newLine": 136,
+                "content": ""
+              }
+            ]
+          },
+          {
+            "header": "@@ -288,6 +296,13 @@ export class RunEngineTriggerTaskService {",
+            "oldStart": 288,
+            "newStart": 296,
+            "lines": [
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:296",
+                "type": "context",
+                "oldLine": 288,
+                "newLine": 296,
+                "content": "          : []"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:297",
+                "type": "context",
+                "oldLine": 289,
+                "newLine": 297,
+                "content": "      ).filter((tag) => tag.trim().length > 0);"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:298",
+                "type": "context",
+                "oldLine": 290,
+                "newLine": 298,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:299",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 299,
+                "content": "      const labels = ("
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:300",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 300,
+                "content": "        body.options?.labels"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:301",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 301,
+                "content": "          ? typeof body.options.labels === \"string\""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:302",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 302,
+                "content": "            ? [body.options.labels]"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:303",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 303,
+                "content": "            : body.options.labels"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:304",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 304,
+                "content": "          : []"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:305",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 305,
+                "content": "      ).filter((label) => label.trim().length > 0);"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:306",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 306,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:307",
+                "type": "context",
+                "oldLine": 291,
+                "newLine": 307,
+                "content": "      const depth = parentRun ? parentRun.depth + 1 : 0;"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:308",
+                "type": "context",
+                "oldLine": 292,
+                "newLine": 308,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:309",
+                "type": "context",
+                "oldLine": 293,
+                "newLine": 309,
+                "content": "      const workerQueueResult = await this.queueConcern.getWorkerQueue("
+              }
+            ]
+          },
+          {
+            "header": "@@ -360,6 +375,7 @@ export class RunEngineTriggerTaskService {",
+            "oldStart": 360,
+            "newStart": 375,
+            "lines": [
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:375",
+                "type": "context",
+                "oldLine": 360,
+                "newLine": 375,
+                "content": "                maxAttempts: body.options?.maxAttempts,"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:376",
+                "type": "context",
+                "oldLine": 361,
+                "newLine": 376,
+                "content": "                taskEventStore: store,"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:377",
+                "type": "context",
+                "oldLine": 362,
+                "newLine": 377,
+                "content": "                ttl,"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:378",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 378,
+                "content": "                labels,"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:379",
+                "type": "context",
+                "oldLine": 363,
+                "newLine": 379,
+                "content": "                tags,"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:380",
+                "type": "context",
+                "oldLine": 364,
+                "newLine": 380,
+                "content": "                oneTimeUseToken: options.oneTimeUseToken,"
+              },
+              {
+                "id": "apps/webapp/app/runEngine/services/triggerTask.server.ts:381",
+                "type": "context",
+                "oldLine": 365,
+                "newLine": 381,
+                "content": "                parentTaskRunId: parentRun?.id,"
+              }
+            ]
+          }
+        ],
+        "additions": 17,
+        "deletions": 0
+      },
+      {
+        "oldPath": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts",
+        "newPath": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -31,6 +31,7 @@ export type CreateTaskRunAttemptOptions = {",
+            "oldStart": 31,
+            "newStart": 31,
+            "lines": [
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:31",
+                "type": "context",
+                "oldLine": 31,
+                "newLine": 31,
+                "content": "  taskRunId: string"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:32",
+                "type": "context",
+                "oldLine": 32,
+                "newLine": 32,
+                "content": "  backgroundWorkerId: string"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:33",
+                "type": "context",
+                "oldLine": 33,
+                "newLine": 33,
+                "content": "  backgroundWorkerTaskId: string"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:34",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 34,
+                "content": "  labels?: string[]"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:35",
+                "type": "context",
+                "oldLine": 34,
+                "newLine": 35,
+                "content": "  queueId: string"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:36",
+                "type": "context",
+                "oldLine": 35,
+                "newLine": 36,
+                "content": "  runtimeEnvironmentId: string"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:37",
+                "type": "context",
+                "oldLine": 36,
+                "newLine": 37,
+                "content": "  isWarmStart?: boolean"
+              }
+            ]
+          },
+          {
+            "header": "@@ -174,6 +175,7 @@ export class CreateTaskRunAttemptService {",
+            "oldStart": 174,
+            "newStart": 175,
+            "lines": [
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:175",
+                "type": "context",
+                "oldLine": 174,
+                "newLine": 175,
+                "content": "        taskRunId,"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:176",
+                "type": "context",
+                "oldLine": 175,
+                "newLine": 176,
+                "content": "        backgroundWorkerId,"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:177",
+                "type": "context",
+                "oldLine": 176,
+                "newLine": 177,
+                "content": "        backgroundWorkerTaskId,"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:178",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 178,
+                "content": "        labels,"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:179",
+                "type": "context",
+                "oldLine": 177,
+                "newLine": 179,
+                "content": "        queueId,"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:180",
+                "type": "context",
+                "oldLine": 178,
+                "newLine": 180,
+                "content": "        runtimeEnvironmentId,"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:181",
+                "type": "context",
+                "oldLine": 179,
+                "newLine": 181,
+                "content": "      } = options;"
+              }
+            ]
+          },
+          {
+            "header": "@@ -239,6 +241,7 @@ export class CreateTaskRunAttemptService {",
+            "oldStart": 239,
+            "newStart": 241,
+            "lines": [
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:241",
+                "type": "context",
+                "oldLine": 239,
+                "newLine": 241,
+                "content": "          runtimeEnvironmentId,"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:242",
+                "type": "context",
+                "oldLine": 240,
+                "newLine": 242,
+                "content": "          queueId,"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:243",
+                "type": "context",
+                "oldLine": 241,
+                "newLine": 243,
+                "content": "          status: \"PENDING\","
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:244",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 244,
+                "content": "          labels: labels ?? [],"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:245",
+                "type": "context",
+                "oldLine": 242,
+                "newLine": 245,
+                "content": "        },"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:246",
+                "type": "context",
+                "oldLine": 243,
+                "newLine": 246,
+                "content": "      });"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:247",
+                "type": "context",
+                "oldLine": 244,
+                "newLine": 247,
+                "content": ""
+              }
+            ]
+          },
+          {
+            "header": "@@ -261,6 +264,7 @@ export class CreateTaskRunAttemptService {",
+            "oldStart": 261,
+            "newStart": 264,
+            "lines": [
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:264",
+                "type": "context",
+                "oldLine": 261,
+                "newLine": 264,
+                "content": "        attempt: {"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:265",
+                "type": "context",
+                "oldLine": 262,
+                "newLine": 265,
+                "content": "          id: attempt.friendlyId,"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:266",
+                "type": "context",
+                "oldLine": 263,
+                "newLine": 266,
+                "content": "          number: attempt.number,"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:267",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 267,
+                "content": "          labels: attempt.labels,"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:268",
+                "type": "context",
+                "oldLine": 264,
+                "newLine": 268,
+                "content": "          status: attempt.status,"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:269",
+                "type": "context",
+                "oldLine": 265,
+                "newLine": 269,
+                "content": "        },"
+              },
+              {
+                "id": "apps/webapp/app/v3/services/createTaskRunAttempt.server.ts:270",
+                "type": "context",
+                "oldLine": 266,
+                "newLine": 270,
+                "content": "      },"
+              }
+            ]
+          }
+        ],
+        "additions": 4,
+        "deletions": 0
+      },
+      {
+        "oldPath": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts",
+        "newPath": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -0,0 +1,137 @@",
+            "oldStart": 0,
+            "newStart": 1,
+            "lines": [
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:1",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1,
+                "content": "import { type ActionFunctionArgs, json } from \"@remix-run/server-runtime\";"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:2",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 2,
+                "content": "import { z } from \"zod\";"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:3",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 3,
+                "content": "import { prisma } from \"~/db.server\";"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:4",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 4,
+                "content": "import { authenticateApiRequest } from \"~/services/apiAuth.server\";"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:5",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 5,
+                "content": "import { logger } from \"~/services/logger.server\";"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:6",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 6,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:7",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 7,
+                "content": "const ParamsSchema = z.object({"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:8",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 8,
+                "content": "  runId: z.string(),"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:9",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 9,
+                "content": "});"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:10",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 10,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:11",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 11,
+                "content": "const BodySchema = z.object({"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:12",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 12,
+                "content": "  labels: z.union([z.string(), z.array(z.string())]),"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:13",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 13,
+                "content": "});"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:14",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 14,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:15",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 15,
+                "content": "const normalizeLabels = (input: string | string[]) => {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:16",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 16,
+                "content": "  const labels = typeof input === \"string\" ? [input] : input;"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:17",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 17,
+                "content": "  const seen = new Set<string>();"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:18",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 18,
+                "content": "  const normalized: string[] = [];"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:19",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 19,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:20",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 20,
+                "content": "  for (const label of labels) {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:21",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 21,
+                "content": "    const trimmed = label.trim();"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:22",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 22,
+                "content": "    if (!trimmed || seen.has(trimmed)) {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:23",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 23,
+                "content": "      continue;"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:24",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 24,
+                "content": "    }"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:25",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 25,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:26",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 26,
+                "content": "    seen.add(trimmed);"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:27",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 27,
+                "content": "    normalized.push(trimmed);"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:28",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 28,
+                "content": "  }"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:29",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 29,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:30",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 30,
+                "content": "  return normalized;"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:31",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 31,
+                "content": "};"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:32",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 32,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:33",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 33,
+                "content": "export async function action({ request, params }: ActionFunctionArgs) {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:34",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 34,
+                "content": "  if (request.method.toUpperCase() !== \"POST\") {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:35",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 35,
+                "content": "    return json({ error: \"Method Not Allowed\" }, { status: 405 });"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:36",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 36,
+                "content": "  }"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:37",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 37,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:38",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 38,
+                "content": "  const authenticationResult = await authenticateApiRequest(request);"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:39",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 39,
+                "content": "  if (!authenticationResult) {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:40",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 40,
+                "content": "    return json({ error: \"Invalid or Missing API Key\" }, { status: 401 });"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:41",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 41,
+                "content": "  }"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:42",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 42,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:43",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 43,
+                "content": "  const parsedParams = ParamsSchema.safeParse(params);"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:44",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 44,
+                "content": "  if (!parsedParams.success) {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:45",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 45,
+                "content": "    return json("
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:46",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 46,
+                "content": "      { error: \"Invalid request parameters\", issues: parsedParams.error.issues },"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:47",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 47,
+                "content": "      { status: 400 }"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:48",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 48,
+                "content": "    );"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:49",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 49,
+                "content": "  }"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:50",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 50,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:51",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 51,
+                "content": "  try {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:52",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 52,
+                "content": "    const anyBody = await request.json();"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:53",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 53,
+                "content": "    const body = BodySchema.safeParse(anyBody);"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:54",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 54,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:55",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 55,
+                "content": "    if (!body.success) {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:56",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 56,
+                "content": "      return json({ error: \"Invalid request body\", issues: body.error.issues }, { status: 400 });"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:57",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 57,
+                "content": "    }"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:58",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 58,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:59",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 59,
+                "content": "    const labels = normalizeLabels(body.data.labels);"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:60",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 60,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:61",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 61,
+                "content": "    const run = await prisma.taskRun.findFirst({"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:62",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 62,
+                "content": "      where: {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:63",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 63,
+                "content": "        friendlyId: parsedParams.data.runId,"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:64",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 64,
+                "content": "        runtimeEnvironmentId: authenticationResult.environment.id,"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:65",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 65,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:66",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 66,
+                "content": "      select: {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:67",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 67,
+                "content": "        id: true,"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:68",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 68,
+                "content": "        labels: true,"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:69",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 69,
+                "content": "        attempts: {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:70",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 70,
+                "content": "          orderBy: {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:71",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 71,
+                "content": "            number: \"desc\","
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:72",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 72,
+                "content": "          },"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:73",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 73,
+                "content": "          take: 1,"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:74",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 74,
+                "content": "          select: {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:75",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 75,
+                "content": "            id: true,"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:76",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 76,
+                "content": "            labels: true,"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:77",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 77,
+                "content": "          },"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:78",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 78,
+                "content": "        },"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:79",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 79,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:80",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 80,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:81",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 81,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:82",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 82,
+                "content": "    if (!run) {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:83",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 83,
+                "content": "      return json({ error: \"Run not found\" }, { status: 404 });"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:84",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 84,
+                "content": "    }"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:85",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 85,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:86",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 86,
+                "content": "    const latestAttempt = run.attempts[0];"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:87",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 87,
+                "content": "    if (!latestAttempt) {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:88",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 88,
+                "content": "      return json({ error: \"Run has not started yet\" }, { status: 409 });"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:89",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 89,
+                "content": "    }"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:90",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 90,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:91",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 91,
+                "content": "    const nextLabels = Array.from("
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:92",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 92,
+                "content": "      new Set([...(latestAttempt.labels ?? []), ...labels])"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:93",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 93,
+                "content": "    );"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:94",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 94,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:95",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 95,
+                "content": "    await prisma.taskRunAttempt.update({"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:96",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 96,
+                "content": "      where: {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:97",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 97,
+                "content": "        id: latestAttempt.id,"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:98",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 98,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:99",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 99,
+                "content": "      data: {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:100",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 100,
+                "content": "        labels: nextLabels,"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:101",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 101,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:102",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 102,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:103",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 103,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:104",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 104,
+                "content": "    await prisma.taskRun.update({"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:105",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 105,
+                "content": "      where: {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:106",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 106,
+                "content": "        id: run.id,"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:107",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 107,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:108",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 108,
+                "content": "      data: {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:109",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 109,
+                "content": "        labels: nextLabels,"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:110",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 110,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:111",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 111,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:112",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 112,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:113",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 113,
+                "content": "    return json("
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:114",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 114,
+                "content": "      {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:115",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 115,
+                "content": "        labels: nextLabels,"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:116",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 116,
+                "content": "        message: `Successfully set ${labels.length} labels.`,"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:117",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 117,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:118",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 118,
+                "content": "      { status: 200 }"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:119",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 119,
+                "content": "    );"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:120",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 120,
+                "content": "  } catch (error) {"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:121",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 121,
+                "content": "    logger.error(\"Failed to add run labels\", { error });"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:122",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 122,
+                "content": "    return json({ error: \"Something went wrong, please try again.\" }, { status: 500 });"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:123",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 123,
+                "content": "  }"
+              },
+              {
+                "id": "apps/webapp/app/routes/api.v1.runs.$runId.labels.ts:124",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 124,
+                "content": "}"
+              }
+            ]
+          }
+        ],
+        "additions": 124,
+        "deletions": 0
+      },
+      {
+        "oldPath": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts",
+        "newPath": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -46,6 +46,7 @@ type ApiRunListOptions = {",
+            "oldStart": 46,
+            "newStart": 46,
+            "lines": [
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:46",
+                "type": "context",
+                "oldLine": 46,
+                "newLine": 46,
+                "content": "  statuses?: string[]"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:47",
+                "type": "context",
+                "oldLine": 47,
+                "newLine": 47,
+                "content": "  tasks?: string[]"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:48",
+                "type": "context",
+                "oldLine": 48,
+                "newLine": 48,
+                "content": "  tags?: string[]"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:49",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 49,
+                "content": "  labels?: string[]"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:50",
+                "type": "context",
+                "oldLine": 49,
+                "newLine": 50,
+                "content": "  versions?: string[]"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:51",
+                "type": "context",
+                "oldLine": 50,
+                "newLine": 51,
+                "content": "  from?: number"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:52",
+                "type": "context",
+                "oldLine": 51,
+                "newLine": 52,
+                "content": "  to?: number"
+              }
+            ]
+          },
+          {
+            "header": "@@ -216,6 +217,10 @@ export class ApiRunListPresenter {",
+            "oldStart": 216,
+            "newStart": 217,
+            "lines": [
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:217",
+                "type": "context",
+                "oldLine": 216,
+                "newLine": 217,
+                "content": "      if (searchParams[\"filter[tag]\"]) {"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:218",
+                "type": "context",
+                "oldLine": 217,
+                "newLine": 218,
+                "content": "        options.tags = searchParams[\"filter[tag]\"];"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:219",
+                "type": "context",
+                "oldLine": 218,
+                "newLine": 219,
+                "content": "      }"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:220",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 220,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:221",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 221,
+                "content": "      if (searchParams[\"filter[label]\"]) {"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:222",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 222,
+                "content": "        options.labels = searchParams[\"filter[label]\"];"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:223",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 223,
+                "content": "      }"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:224",
+                "type": "context",
+                "oldLine": 219,
+                "newLine": 224,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:225",
+                "type": "context",
+                "oldLine": 220,
+                "newLine": 225,
+                "content": "      const { runs, pagination } = await runsRepository.listRuns({"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:226",
+                "type": "context",
+                "oldLine": 221,
+                "newLine": 226,
+                "content": "        organizationId,"
+              }
+            ]
+          },
+          {
+            "header": "@@ -310,6 +315,7 @@ export class ApiRunListPresenter {",
+            "oldStart": 310,
+            "newStart": 315,
+            "lines": [
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:315",
+                "type": "context",
+                "oldLine": 310,
+                "newLine": 315,
+                "content": "            env: {"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:316",
+                "type": "context",
+                "oldLine": 311,
+                "newLine": 316,
+                "content": "              id: run.environment.id,"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:317",
+                "type": "context",
+                "oldLine": 312,
+                "newLine": 317,
+                "content": "              name: run.environment.slug,"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:318",
+                "type": "context",
+                "oldLine": 313,
+                "newLine": 318,
+                "content": "            },"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:319",
+                "type": "context",
+                "oldLine": 314,
+                "newLine": 319,
+                "content": "            tags: run.tags,"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:320",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 320,
+                "content": "            labels: run.labels,"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:321",
+                "type": "context",
+                "oldLine": 315,
+                "newLine": 321,
+                "content": "            costInCents: run.costInCents,"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:322",
+                "type": "context",
+                "oldLine": 316,
+                "newLine": 322,
+                "content": "            baseCostInCents: run.baseCostInCents,"
+              },
+              {
+                "id": "apps/webapp/app/presenters/v3/ApiRunListPresenter.server.ts:323",
+                "type": "context",
+                "oldLine": 317,
+                "newLine": 323,
+                "content": "            durationMs: run.usageDurationMs,"
+              }
+            ]
+          }
+        ],
+        "additions": 6,
+        "deletions": 0
+      },
+      {
+        "oldPath": "apps/webapp/app/services/runsReplicationService.server.ts",
+        "newPath": "apps/webapp/app/services/runsReplicationService.server.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -846,6 +846,15 @@ export class RunsReplicationService {",
+            "oldStart": 846,
+            "newStart": 846,
+            "lines": [
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:846",
+                "type": "context",
+                "oldLine": 846,
+                "newLine": 846,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:847",
+                "type": "context",
+                "oldLine": 847,
+                "newLine": 847,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:848",
+                "type": "context",
+                "oldLine": 848,
+                "newLine": 848,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:849",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 849,
+                "content": "    const latestAttempt = await this.prisma.taskRunAttempt.findFirst({"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:850",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 850,
+                "content": "      where: {"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:851",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 851,
+                "content": "        taskRunId: run.id,"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:852",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 852,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:853",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 853,
+                "content": "      orderBy: {"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:854",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 854,
+                "content": "        number: \"desc\","
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:855",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 855,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:856",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 856,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:857",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 857,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:858",
+                "type": "context",
+                "oldLine": 849,
+                "newLine": 858,
+                "content": "    const annotations = this.#parseAnnotations(run.annotations);"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:859",
+                "type": "context",
+                "oldLine": 850,
+                "newLine": 859,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:860",
+                "type": "context",
+                "oldLine": 851,
+                "newLine": 860,
+                "content": "    // Return array matching TASK_RUN_COLUMNS order"
+              }
+            ]
+          },
+          {
+            "header": "@@ -900,6 +909,7 @@ export class RunsReplicationService {",
+            "oldStart": 900,
+            "newStart": 909,
+            "lines": [
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:909",
+                "type": "context",
+                "oldLine": 900,
+                "newLine": 909,
+                "content": "      output, // output"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:910",
+                "type": "context",
+                "oldLine": 901,
+                "newLine": 910,
+                "content": "      errorData, // error"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:911",
+                "type": "context",
+                "oldLine": 902,
+                "newLine": 911,
+                "content": "      errorFingerprint, // error_fingerprint"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:912",
+                "type": "context",
+                "oldLine": 903,
+                "newLine": 912,
+                "content": "      run.runTags ?? [], // tags"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:913",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 913,
+                "content": "      latestAttempt?.labels ?? [], // labels"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:914",
+                "type": "context",
+                "oldLine": 904,
+                "newLine": 914,
+                "content": "      run.taskVersion ?? \"\", // task_version"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:915",
+                "type": "context",
+                "oldLine": 905,
+                "newLine": 915,
+                "content": "      run.sdkVersion ?? \"\", // sdk_version"
+              },
+              {
+                "id": "apps/webapp/app/services/runsReplicationService.server.ts:916",
+                "type": "context",
+                "oldLine": 906,
+                "newLine": 916,
+                "content": "      run.cliVersion ?? \"\", // cli_version"
+              }
+            ]
+          }
+        ],
+        "additions": 10,
+        "deletions": 0
+      },
+      {
+        "oldPath": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts",
+        "newPath": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -52,6 +52,7 @@ export type ListRunsOptions = {",
+            "oldStart": 52,
+            "newStart": 52,
+            "lines": [
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:52",
+                "type": "context",
+                "oldLine": 52,
+                "newLine": 52,
+                "content": "  versions?: string[]"
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:53",
+                "type": "context",
+                "oldLine": 53,
+                "newLine": 53,
+                "content": "  statuses?: string[]"
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:54",
+                "type": "context",
+                "oldLine": 54,
+                "newLine": 54,
+                "content": "  tags?: string[]"
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:55",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 55,
+                "content": "  labels?: string[]"
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:56",
+                "type": "context",
+                "oldLine": 55,
+                "newLine": 56,
+                "content": "  queues?: string[]"
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:57",
+                "type": "context",
+                "oldLine": 56,
+                "newLine": 57,
+                "content": "  regions?: string[]"
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:58",
+                "type": "context",
+                "oldLine": 57,
+                "newLine": 58,
+                "content": "  period?: number"
+              }
+            ]
+          },
+          {
+            "header": "@@ -271,6 +272,10 @@ export class ClickHouseRunsRepository {",
+            "oldStart": 271,
+            "newStart": 272,
+            "lines": [
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:272",
+                "type": "context",
+                "oldLine": 271,
+                "newLine": 272,
+                "content": "    queryBuilder.where(\"hasAny(tags, {tags: Array(String)})\", { tags: options.tags });"
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:273",
+                "type": "context",
+                "oldLine": 272,
+                "newLine": 273,
+                "content": "  }"
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:274",
+                "type": "context",
+                "oldLine": 273,
+                "newLine": 274,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:275",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 275,
+                "content": "  if (options.labels && options.labels.length > 0) {"
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:276",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 276,
+                "content": "    queryBuilder.where(\"hasAny(labels, {labels: Array(String)})\", { labels: options.labels });"
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:277",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 277,
+                "content": "  }"
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:278",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 278,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:279",
+                "type": "context",
+                "oldLine": 274,
+                "newLine": 279,
+                "content": "  if (options.scheduleId) {"
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:280",
+                "type": "context",
+                "oldLine": 275,
+                "newLine": 280,
+                "content": "    queryBuilder.where(\"schedule_id = {scheduleId: String}\", { scheduleId: options.scheduleId });"
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:281",
+                "type": "context",
+                "oldLine": 276,
+                "newLine": 281,
+                "content": "  }"
+              }
+            ]
+          },
+          {
+            "header": "@@ -514,6 +519,7 @@ export class ClickHouseRunsRepository {",
+            "oldStart": 514,
+            "newStart": 519,
+            "lines": [
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:519",
+                "type": "context",
+                "oldLine": 514,
+                "newLine": 519,
+                "content": "      \"ttl\","
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:520",
+                "type": "context",
+                "oldLine": 515,
+                "newLine": 520,
+                "content": "      \"status\","
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:521",
+                "type": "context",
+                "oldLine": 516,
+                "newLine": 521,
+                "content": "      \"tags\","
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:522",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 522,
+                "content": "      \"labels\","
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:523",
+                "type": "context",
+                "oldLine": 517,
+                "newLine": 523,
+                "content": "      \"task_kind\","
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:524",
+                "type": "context",
+                "oldLine": 518,
+                "newLine": 524,
+                "content": "      \"machine_preset\","
+              },
+              {
+                "id": "apps/webapp/app/services/runsRepository/clickhouseRunsRepository.server.ts:525",
+                "type": "context",
+                "oldLine": 519,
+                "newLine": 525,
+                "content": "      \"created_at\","
+              }
+            ]
+          }
+        ],
+        "additions": 6,
+        "deletions": 0
+      },
+      {
+        "oldPath": "apps/webapp/test/runLabels.test.ts",
+        "newPath": "apps/webapp/test/runLabels.test.ts",
+        "language": "typescript",
+        "hunks": [
+          {
+            "header": "@@ -0,0 +1,173 @@",
+            "oldStart": 0,
+            "newStart": 1,
+            "lines": [
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:1",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 1,
+                "content": "import { describe, expect, it } from \"vitest\";"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:2",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 2,
+                "content": "import { DefaultTriggerTaskValidator } from \"~/runEngine/validators/triggerTaskValidator\";"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:3",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 3,
+                "content": "import { createTestRun, createTestRunAttempt } from \"./helpers/runs\";"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:4",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 4,
+                "content": "import { prisma } from \"~/db.server\";"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:5",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 5,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:6",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 6,
+                "content": "describe(\"run labels\", () => {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:7",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 7,
+                "content": "  it(\"accepts labels on trigger options\", () => {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:8",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 8,
+                "content": "    const validator = new DefaultTriggerTaskValidator();"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:9",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 9,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:10",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 10,
+                "content": "    const result = validator.validateLabels({"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:11",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 11,
+                "content": "      labels: [\"customer:acme\", \"import\"],"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:12",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 12,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:13",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 13,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:14",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 14,
+                "content": "    expect(result.ok).toBe(true);"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:15",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 15,
+                "content": "  });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:16",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 16,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:17",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 17,
+                "content": "  it(\"rejects empty labels\", () => {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:18",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 18,
+                "content": "    const validator = new DefaultTriggerTaskValidator();"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:19",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 19,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:20",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 20,
+                "content": "    const result = validator.validateLabels({"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:21",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 21,
+                "content": "      labels: [\"customer:acme\", \"\"],"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:22",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 22,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:23",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 23,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:24",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 24,
+                "content": "    expect(result.ok).toBe(false);"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:25",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 25,
+                "content": "  });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:26",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 26,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:27",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 27,
+                "content": "  it(\"stores labels on the current attempt\", async () => {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:28",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 28,
+                "content": "    const run = await createTestRun({"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:29",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 29,
+                "content": "      labels: [\"customer:acme\"],"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:30",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 30,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:31",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 31,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:32",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 32,
+                "content": "    const attempt = await createTestRunAttempt({"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:33",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 33,
+                "content": "      taskRunId: run.id,"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:34",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 34,
+                "content": "      labels: [\"customer:acme\"],"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:35",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 35,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:36",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 36,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:37",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 37,
+                "content": "    expect(attempt.labels).toEqual([\"customer:acme\"]);"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:38",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 38,
+                "content": "  });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:39",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 39,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:40",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 40,
+                "content": "  it(\"adds labels through the run labels API\", async () => {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:41",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 41,
+                "content": "    const run = await createTestRun({"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:42",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 42,
+                "content": "      labels: [],"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:43",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 43,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:44",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 44,
+                "content": "    await createTestRunAttempt({"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:45",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 45,
+                "content": "      taskRunId: run.id,"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:46",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 46,
+                "content": "      labels: [],"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:47",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 47,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:48",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 48,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:49",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 49,
+                "content": "    await prisma.taskRun.update({"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:50",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 50,
+                "content": "      where: {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:51",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 51,
+                "content": "        id: run.id,"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:52",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 52,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:53",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 53,
+                "content": "      data: {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:54",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 54,
+                "content": "        labels: [\"import\"],"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:55",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 55,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:56",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 56,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:57",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 57,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:58",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 58,
+                "content": "    const attempt = await prisma.taskRunAttempt.findFirstOrThrow({"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:59",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 59,
+                "content": "      where: {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:60",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 60,
+                "content": "        taskRunId: run.id,"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:61",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 61,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:62",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 62,
+                "content": "      orderBy: {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:63",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 63,
+                "content": "        number: \"desc\","
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:64",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 64,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:65",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 65,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:66",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 66,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:67",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 67,
+                "content": "    await prisma.taskRunAttempt.update({"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:68",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 68,
+                "content": "      where: {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:69",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 69,
+                "content": "        id: attempt.id,"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:70",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 70,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:71",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 71,
+                "content": "      data: {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:72",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 72,
+                "content": "        labels: [\"import\"],"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:73",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 73,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:74",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 74,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:75",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 75,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:76",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 76,
+                "content": "    const updated = await prisma.taskRun.findUniqueOrThrow({"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:77",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 77,
+                "content": "      where: {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:78",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 78,
+                "content": "        id: run.id,"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:79",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 79,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:80",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 80,
+                "content": "      include: {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:81",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 81,
+                "content": "        attempts: true,"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:82",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 82,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:83",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 83,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:84",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 84,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:85",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 85,
+                "content": "    expect(updated.labels).toEqual([\"import\"]);"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:86",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 86,
+                "content": "    expect(updated.attempts[0].labels).toEqual([\"import\"]);"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:87",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 87,
+                "content": "  });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:88",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 88,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:89",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 89,
+                "content": "  it(\"uses latest attempt labels for replication\", async () => {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:90",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 90,
+                "content": "    const run = await createTestRun({"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:91",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 91,
+                "content": "      labels: [\"customer:acme\"],"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:92",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 92,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:93",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 93,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:94",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 94,
+                "content": "    await createTestRunAttempt({"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:95",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 95,
+                "content": "      taskRunId: run.id,"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:96",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 96,
+                "content": "      number: 1,"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:97",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 97,
+                "content": "      labels: [\"customer:acme\"],"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:98",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 98,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:99",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 99,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:100",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 100,
+                "content": "    await createTestRunAttempt({"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:101",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 101,
+                "content": "      taskRunId: run.id,"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:102",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 102,
+                "content": "      number: 2,"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:103",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 103,
+                "content": "      labels: [\"retry\"],"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:104",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 104,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:105",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 105,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:106",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 106,
+                "content": "    const latestAttempt = await prisma.taskRunAttempt.findFirstOrThrow({"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:107",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 107,
+                "content": "      where: {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:108",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 108,
+                "content": "        taskRunId: run.id,"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:109",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 109,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:110",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 110,
+                "content": "      orderBy: {"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:111",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 111,
+                "content": "        number: \"desc\","
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:112",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 112,
+                "content": "      },"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:113",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 113,
+                "content": "    });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:114",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 114,
+                "content": ""
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:115",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 115,
+                "content": "    expect(latestAttempt.labels).toEqual([\"retry\"]);"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:116",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 116,
+                "content": "  });"
+              },
+              {
+                "id": "apps/webapp/test/runLabels.test.ts:117",
+                "type": "add",
+                "oldLine": null,
+                "newLine": 117,
+                "content": "});"
+              }
+            ]
+          }
+        ],
+        "additions": 117,
+        "deletions": 0
+      }
+    ],
+    "fileCount": 13,
+    "additions": 368,
+    "deletions": 0
+  },
+  "flaws": [
+    {
+      "id": "flaw-1",
+      "number": 1,
+      "title": "Labels Are Stored On Attempts Instead Of The Durable Run Contract",
+      "prompt": "Should labels belong to `TaskRunAttempt`, or to the task run?",
+      "expectedIdentification": "- `identify`: The PR makes labels an attempt-level concept and then tries to mirror latest-attempt labels back onto `TaskRun`. Trigger request labels describe the run the customer triggered, not a particular retry attempt. The labels API updates only the latest attempt and the denormalized run copy, while ClickHouse replication reads `latestAttempt?.labels`. A retry can therefore replace or drop labels even though the run identity did not change.\n- `impact`: Run list filters become unstable across retries. A run can appear under `customer:acme` on attempt 1, disappear on attempt 2, and reappear if another API call updates the latest attempt. Replays, retries, parent/child views, realtime subscriptions, billing/debug reports, and ClickHouse analytics now disagree about the same run. The product teaches users that labels are run metadata, but the implementation stores them on transient execution attempts.\n- `fix_direction`: Put labels on `TaskRun` as the source of truth, or better, reuse/extend the existing run-level tags contract (`TaskRun.runTags` and `TaskRunTag`) if labels are just another run filter. Attempt labels should exist only as explicit attempt-scoped diagnostics with a separate name and API. Replication and filtering should read from the durable run-level column/relation, not the latest attempt.",
+      "expectedImpact": "",
+      "expectedFix": "",
+      "goldenAnswer": "- `identify`: The PR makes labels an attempt-level concept and then tries to mirror latest-attempt labels back onto `TaskRun`. Trigger request labels describe the run the customer triggered, not a particular retry attempt. The labels API updates only the latest attempt and the denormalized run copy, while ClickHouse replication reads `latestAttempt?.labels`. A retry can therefore replace or drop labels even though the run identity did not change.\n- `impact`: Run list filters become unstable across retries. A run can appear under `customer:acme` on attempt 1, disappear on attempt 2, and reappear if another API call updates the latest attempt. Replays, retries, parent/child views, realtime subscriptions, billing/debug reports, and ClickHouse analytics now disagree about the same run. The product teaches users that labels are run metadata, but the implementation stores them on transient execution attempts.\n- `fix_direction`: Put labels on `TaskRun` as the source of truth, or better, reuse/extend the existing run-level tags contract (`TaskRun.runTags` and `TaskRunTag`) if labels are just another run filter. Attempt labels should exist only as explicit attempt-scoped diagnostics with a separate name and API. Replication and filtering should read from the durable run-level column/relation, not the latest attempt.",
+      "hints": [
+        "Ask what object the user thinks they are labeling: the run or one retry attempt.",
+        "Follow one run through attempt 1, attempt 2, and ClickHouse replication.",
+        "The danger is the latestAttempt?.labels read and the API update to taskRunAttempt, not the existence of labels alone."
+      ]
+    },
+    {
+      "id": "flaw-2",
+      "number": 2,
+      "title": "Label Count And Size Are Unbounded",
+      "prompt": "What protects the database, ClickHouse indexes, API responses, and dashboard filters from huge label payloads?",
+      "expectedIdentification": "- `identify`: The validators only reject empty labels. They do not cap label count, label length, total payload size, or normalized duplicates. The public API endpoint accepts arbitrary arrays of arbitrary strings and writes them into Postgres arrays, then replication indexes them in ClickHouse. Existing run tags already have `MAX_TAGS_PER_RUN = 10`, but labels do not reuse that limit or introduce a label-specific one.\n- `impact`: A customer or bug can attach thousands of labels or very large strings to a run. That bloats Postgres rows, API responses, ClickHouse replication payloads, token bloom filter indexes, dashboard filter queries, and realtime payloads. It also creates cost and latency surprises in a high-volume task system where labels are copied into every listed run.\n- `fix_direction`: Define explicit limits at the shared schema/service boundary: maximum labels per run, maximum label length, allowed characters or UTF-8 byte size, normalization rules, and dedupe behavior. Reuse the tag limit if labels are the same product concept. Add tests for too many labels, long labels, duplicate/case-normalized labels, API add-label limits, and trigger-time validation.",
+      "expectedImpact": "",
+      "expectedFix": "",
+      "goldenAnswer": "- `identify`: The validators only reject empty labels. They do not cap label count, label length, total payload size, or normalized duplicates. The public API endpoint accepts arbitrary arrays of arbitrary strings and writes them into Postgres arrays, then replication indexes them in ClickHouse. Existing run tags already have `MAX_TAGS_PER_RUN = 10`, but labels do not reuse that limit or introduce a label-specific one.\n- `impact`: A customer or bug can attach thousands of labels or very large strings to a run. That bloats Postgres rows, API responses, ClickHouse replication payloads, token bloom filter indexes, dashboard filter queries, and realtime payloads. It also creates cost and latency surprises in a high-volume task system where labels are copied into every listed run.\n- `fix_direction`: Define explicit limits at the shared schema/service boundary: maximum labels per run, maximum label length, allowed characters or UTF-8 byte size, normalization rules, and dedupe behavior. Reuse the tag limit if labels are the same product concept. Add tests for too many labels, long labels, duplicate/case-normalized labels, API add-label limits, and trigger-time validation.",
+      "hints": [
+        "Compare label validation with existing run tag validation.",
+        "Think like an ingestion reviewer: every label is replicated, indexed, queried, and returned.",
+        "The validator says \"not empty\" but never says \"how many\" or \"how large.\""
+      ]
+    }
+  ],
+  "debrief": {
+    "raw": "### Correctness Verdict\n\nFor flaw 1, a correct answer must identify the run-versus-attempt modeling error. Answers that only say \"there is duplicated data\" are incomplete unless they explain why retries/latest attempts make labels unstable for a run-level product feature.\n\nFor flaw 2, a correct answer must identify the missing bounds on label count and size. Answers that only say \"validate input\" are incomplete unless they connect validation to storage, ClickHouse indexing, list APIs, and high-volume run ingestion.\n\n### Product-Level Change\n\nThe PR tries to help users classify runs for filtering and analytics. That is a useful workflow: teams want to find all runs for a customer, import, region, or priority. But the product promise is \"this run has these labels,\" not \"this particular execution attempt currently has these labels.\"\n\n### Changed Contracts\n\n- Trigger request contract: `options.labels` becomes accepted input.\n- Data contract: labels are added to both `TaskRun` and `TaskRunAttempt`.\n- API contract: run list/detail responses and a new add-label endpoint expose labels.\n- Analytics contract: ClickHouse gains a replicated `labels` array and filter support.\n- Retry contract: attempts can now disagree about labels for the same run.\n- Storage contract: labels become indexed, replicated, and returned without defined size limits.\n\n### Failure Modes\n\nA customer triggers a run with `customer:acme`. The first attempt fails. The retry attempt is created without labels, or with `retry` copied from a worker-local path. The run now vanishes from `filter[label]=customer:acme` even though it is still the same customer run.\n\nAnother customer accidentally sends 2,000 labels in a batch trigger. The app accepts it, Postgres stores it, ClickHouse indexes it, and every run list response now carries a huge array. A feature meant to make filtering easier becomes a storage and query-cost multiplier.\n\n### Reviewer Thought Process\n\nA strong reviewer starts by naming the domain object. Trigger.dev has runs and attempts; attempts are execution tries, while runs are the durable customer-facing unit. Labels used for filtering, analytics, API responses, and customer context should follow the run, not the latest attempt.\n\nThe second move is to compare with an existing similar feature. The codebase already has run tags, a maximum tag count, ClickHouse tag storage, and run-list filters. That existing contract is strong evidence that this PR should either reuse tags or deliberately explain why labels are different.\n\n### Better Implementation Direction\n\nTreat labels as bounded run-level metadata:\n\n- Decide whether labels are just a renamed/expanded version of existing run tags.\n- Store source-of-truth labels on `TaskRun` or the existing tag relation.\n- Keep attempt-scoped labels separate and explicit if needed for retry diagnostics.\n- Enforce shared limits at trigger-time and add-label-time.\n- Replicate the run-level labels to ClickHouse.\n- Add tests for retries preserving labels, replay semantics, API add-label limits, and high-cardinality rejection.",
+    "productLevelChange": "The PR tries to help users classify runs for filtering and analytics. That is a useful workflow: teams want to find all runs for a customer, import, region, or priority. But the product promise is \"this run has these labels,\" not \"this particular execution attempt currently has these labels.\"",
+    "changedContracts": "- Trigger request contract: `options.labels` becomes accepted input.",
+    "failureModes": "A customer triggers a run with `customer:acme`. The first attempt fails. The retry attempt is created without labels, or with `retry` copied from a worker-local path. The run now vanishes from `filter[label]=customer:acme` even though it is still the same customer run.",
+    "reviewerThoughtProcess": "A strong reviewer starts by naming the domain object. Trigger.dev has runs and attempts; attempts are execution tries, while runs are the durable customer-facing unit. Labels used for filtering, analytics, API responses, and customer context should follow the run, not the latest attempt.",
+    "betterImplementation": "Treat labels as bounded run-level metadata:"
+  },
+  "verdictRubric": "For flaw 1, a correct answer must identify the run-versus-attempt modeling error. Answers that only say \"there is duplicated data\" are incomplete unless they explain why retries/latest attempts make labels unstable for a run-level product feature.\n\nFor flaw 2, a correct answer must identify the missing bounds on label count and size. Answers that only say \"validate input\" are incomplete unless they connect validation to storage, ClickHouse indexing, list APIs, and high-volume run ingestion.\n\n### Product-Level Change\n\nThe PR tries to help users classify runs for filtering and analytics. That is a useful workflow: teams want to find all runs for a customer, import, region, or priority. But the product promise is \"this run has these labels,\" not \"this particular execution attempt currently has these labels.\"\n\n### Changed Contracts\n\n- Trigger request contract: `options.labels` becomes accepted input.\n- Data contract: labels are added to both `TaskRun` and `TaskRunAttempt`.\n- API contract: run list/detail responses and a new add-label endpoint expose labels.\n- Analytics contract: ClickHouse gains a replicated `labels` array and filter support.\n- Retry contract: attempts can now disagree about labels for the same run.\n- Storage contract: labels become indexed, replicated, and returned without defined size limits.\n\n### Failure Modes\n\nA customer triggers a run with `customer:acme`. The first attempt fails. The retry attempt is created without labels, or with `retry` copied from a worker-local path. The run now vanishes from `filter[label]=customer:acme` even though it is still the same customer run.\n\nAnother customer accidentally sends 2,000 labels in a batch trigger. The app accepts it, Postgres stores it, ClickHouse indexes it, and every run list response now carries a huge array. A feature meant to make filtering easier becomes a storage and query-cost multiplier.\n\n### Reviewer Thought Process\n\nA strong reviewer starts by naming the domain object. Trigger.dev has runs and attempts; attempts are execution tries, while runs are the durable customer-facing unit. Labels used for filtering, analytics, API responses, and customer context should follow the run, not the latest attempt.\n\nThe second move is to compare with an existing similar feature. The codebase already has run tags, a maximum tag count, ClickHouse tag storage, and run-list filters. That existing contract is strong evidence that this PR should either reuse tags or deliberately explain why labels are different.\n\n### Better Implementation Direction\n\nTreat labels as bounded run-level metadata:\n\n- Decide whether labels are just a renamed/expanded version of existing run tags.\n- Store source-of-truth labels on `TaskRun` or the existing tag relation.\n- Keep attempt-scoped labels separate and explicit if needed for retry diagnostics.\n- Enforce shared limits at trigger-time and add-label-time.\n- Replicate the run-level labels to ClickHouse.\n- Add tests for retries preserving labels, replay semantics, API add-label limits, and high-cardinality rejection."
+}

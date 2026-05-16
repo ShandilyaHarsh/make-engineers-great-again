@@ -1,0 +1,1306 @@
+{
+  "generatedAt": "static",
+  "count": 100,
+  "exercises": [
+    {
+      "id": "TS-001",
+      "slug": "TS-001-langfuse-dataset-runs-from-traces",
+      "title": "Langfuse Dataset Runs From Trace IDs",
+      "sourceRepo": {
+        "label": "langfuse/langfuse",
+        "url": "https://github.com/langfuse/langfuse"
+      },
+      "difficulty": 1,
+      "representedDiffLines": 825,
+      "flawCount": 2,
+      "fileName": "TS-001.json"
+    },
+    {
+      "id": "TS-002",
+      "slug": "TS-002-calcom-bulk-availability-preview",
+      "title": "Cal.diy Bulk Availability Preview For Event Types",
+      "sourceRepo": {
+        "label": "calcom/cal.diy",
+        "url": "https://github.com/calcom/cal.diy"
+      },
+      "difficulty": 1,
+      "representedDiffLines": 1032,
+      "flawCount": 2,
+      "fileName": "TS-002.json"
+    },
+    {
+      "id": "TS-003",
+      "slug": "TS-003-directus-saved-query-export",
+      "title": "Directus Saved-Query Export For Collections",
+      "sourceRepo": {
+        "label": "directus/directus",
+        "url": "https://github.com/directus/directus"
+      },
+      "difficulty": 1,
+      "representedDiffLines": 563,
+      "flawCount": 2,
+      "fileName": "TS-003.json"
+    },
+    {
+      "id": "TS-004",
+      "slug": "TS-004-payload-soft-delete-documents",
+      "title": "Payload Soft Delete For Collection Documents",
+      "sourceRepo": {
+        "label": "payloadcms/payload",
+        "url": "https://github.com/payloadcms/payload"
+      },
+      "difficulty": 1,
+      "representedDiffLines": 649,
+      "flawCount": 2,
+      "fileName": "TS-004.json"
+    },
+    {
+      "id": "TS-005",
+      "slug": "TS-005-medusa-order-tags",
+      "title": "Medusa Order Tags For Internal Operations",
+      "sourceRepo": {
+        "label": "medusajs/medusa",
+        "url": "https://github.com/medusajs/medusa"
+      },
+      "difficulty": 1,
+      "representedDiffLines": 605,
+      "flawCount": 2,
+      "fileName": "TS-005.json"
+    },
+    {
+      "id": "TS-006",
+      "slug": "TS-006-triggerdev-run-labels",
+      "title": "Trigger.dev Labels For Task Runs",
+      "sourceRepo": {
+        "label": "triggerdotdev/trigger.dev",
+        "url": "https://github.com/triggerdotdev/trigger.dev"
+      },
+      "difficulty": 1,
+      "representedDiffLines": 602,
+      "flawCount": 2,
+      "fileName": "TS-006.json"
+    },
+    {
+      "id": "TS-007",
+      "slug": "TS-007-infisical-project-wide-secret-search",
+      "title": "Infisical Project-Wide Secret Search",
+      "sourceRepo": {
+        "label": "Infisical/infisical",
+        "url": "https://github.com/Infisical/infisical"
+      },
+      "difficulty": 1,
+      "representedDiffLines": 727,
+      "flawCount": 2,
+      "fileName": "TS-007.json"
+    },
+    {
+      "id": "TS-008",
+      "slug": "TS-008-novu-subscriber-channel-overrides",
+      "title": "Novu Subscriber Channel Preference Overrides",
+      "sourceRepo": {
+        "label": "novuhq/novu",
+        "url": "https://github.com/novuhq/novu"
+      },
+      "difficulty": 1,
+      "representedDiffLines": 602,
+      "flawCount": 2,
+      "fileName": "TS-008.json"
+    },
+    {
+      "id": "TS-009",
+      "slug": "TS-009-unkey-editable-api-key-metadata",
+      "title": "Unkey Editable API-Key Metadata",
+      "sourceRepo": {
+        "label": "unkeyed/unkey",
+        "url": "https://github.com/unkeyed/unkey"
+      },
+      "difficulty": 1,
+      "representedDiffLines": 818,
+      "flawCount": 2,
+      "fileName": "TS-009.json"
+    },
+    {
+      "id": "TS-010",
+      "slug": "TS-010-trpc-admin-internal-batch-endpoint",
+      "title": "tRPC Admin Internal Batch Endpoint",
+      "sourceRepo": {
+        "label": "trpc/trpc",
+        "url": "https://github.com/trpc/trpc"
+      },
+      "difficulty": 1,
+      "representedDiffLines": 891,
+      "flawCount": 2,
+      "fileName": "TS-010.json"
+    },
+    {
+      "id": "TS-011",
+      "slug": "TS-011-langfuse-trace-status-filter",
+      "title": "Langfuse Trace Status Filter",
+      "sourceRepo": {
+        "label": "langfuse/langfuse",
+        "url": "https://github.com/langfuse/langfuse"
+      },
+      "difficulty": 2,
+      "representedDiffLines": 748,
+      "flawCount": 2,
+      "fileName": "TS-011.json"
+    },
+    {
+      "id": "TS-012",
+      "slug": "TS-012-infisical-secret-versions-table",
+      "title": "Infisical Secret Versions Table",
+      "sourceRepo": {
+        "label": "Infisical/infisical",
+        "url": "https://github.com/Infisical/infisical"
+      },
+      "difficulty": 2,
+      "representedDiffLines": 985,
+      "flawCount": 2,
+      "fileName": "TS-012.json"
+    },
+    {
+      "id": "TS-013",
+      "slug": "TS-013-directus-collection-aliases",
+      "title": "Directus Collection Aliases",
+      "sourceRepo": {
+        "label": "directus/directus",
+        "url": "https://github.com/directus/directus"
+      },
+      "difficulty": 2,
+      "representedDiffLines": 888,
+      "flawCount": 2,
+      "fileName": "TS-013.json"
+    },
+    {
+      "id": "TS-014",
+      "slug": "TS-014-medusa-checkout-inventory-reservations",
+      "title": "Medusa Checkout Inventory Reservations",
+      "sourceRepo": {
+        "label": "medusajs/medusa",
+        "url": "https://github.com/medusajs/medusa"
+      },
+      "difficulty": 2,
+      "representedDiffLines": 907,
+      "flawCount": 2,
+      "fileName": "TS-014.json"
+    },
+    {
+      "id": "TS-015",
+      "slug": "TS-015-payload-access-policy-snapshots",
+      "title": "Payload Access Policy Snapshots",
+      "sourceRepo": {
+        "label": "payloadcms/payload",
+        "url": "https://github.com/payloadcms/payload"
+      },
+      "difficulty": 2,
+      "representedDiffLines": 861,
+      "flawCount": 2,
+      "fileName": "TS-015.json"
+    },
+    {
+      "id": "TS-016",
+      "slug": "TS-016-novu-digest-windows",
+      "title": "Novu Digest Windows",
+      "sourceRepo": {
+        "label": "novuhq/novu",
+        "url": "https://github.com/novuhq/novu"
+      },
+      "difficulty": 2,
+      "representedDiffLines": 1100,
+      "flawCount": 2,
+      "fileName": "TS-016.json"
+    },
+    {
+      "id": "TS-017",
+      "slug": "TS-017-triggerdev-run-graph",
+      "title": "Trigger.dev Run Graph",
+      "sourceRepo": {
+        "label": "triggerdotdev/trigger.dev",
+        "url": "https://github.com/triggerdotdev/trigger.dev"
+      },
+      "difficulty": 2,
+      "representedDiffLines": 896,
+      "flawCount": 2,
+      "fileName": "TS-017.json"
+    },
+    {
+      "id": "TS-018",
+      "slug": "TS-018-unkey-persisted-rate-limit-buckets",
+      "title": "Unkey Persisted Rate-Limit Buckets",
+      "sourceRepo": {
+        "label": "unkeyed/unkey",
+        "url": "https://github.com/unkeyed/unkey"
+      },
+      "difficulty": 2,
+      "representedDiffLines": 1140,
+      "flawCount": 2,
+      "fileName": "TS-018.json"
+    },
+    {
+      "id": "TS-019",
+      "slug": "TS-019-calcom-one-off-availability-exceptions",
+      "title": "Cal.diy One-Off Availability Exceptions",
+      "sourceRepo": {
+        "label": "calcom/cal.diy",
+        "url": "https://github.com/calcom/cal.diy"
+      },
+      "difficulty": 2,
+      "representedDiffLines": 925,
+      "flawCount": 2,
+      "fileName": "TS-019.json"
+    },
+    {
+      "id": "TS-020",
+      "slug": "TS-020-prisma-generated-computed-fields",
+      "title": "Prisma Generated Computed Fields",
+      "sourceRepo": {
+        "label": "prisma/prisma",
+        "url": "https://github.com/prisma/prisma"
+      },
+      "difficulty": 2,
+      "representedDiffLines": 1104,
+      "flawCount": 2,
+      "fileName": "TS-020.json"
+    },
+    {
+      "id": "TS-021",
+      "slug": "TS-021-infisical-service-token-secret-scopes",
+      "title": "Infisical Service Token Secret Scopes",
+      "sourceRepo": {
+        "label": "Infisical/infisical",
+        "url": "https://github.com/Infisical/infisical"
+      },
+      "difficulty": 3,
+      "representedDiffLines": 1123,
+      "flawCount": 2,
+      "fileName": "TS-021.json"
+    },
+    {
+      "id": "TS-022",
+      "slug": "TS-022-directus-numeric-field-aggregates",
+      "title": "Directus Numeric Field Aggregates",
+      "sourceRepo": {
+        "label": "directus/directus",
+        "url": "https://github.com/directus/directus"
+      },
+      "difficulty": 3,
+      "representedDiffLines": 1094,
+      "flawCount": 2,
+      "fileName": "TS-022.json"
+    },
+    {
+      "id": "TS-023",
+      "slug": "TS-023-payload-collection-access-cache",
+      "title": "Payload Collection Access Decision Cache",
+      "sourceRepo": {
+        "label": "payloadcms/payload",
+        "url": "https://github.com/payloadcms/payload"
+      },
+      "difficulty": 3,
+      "representedDiffLines": 1101,
+      "flawCount": 2,
+      "fileName": "TS-023.json"
+    },
+    {
+      "id": "TS-024",
+      "slug": "TS-024-langfuse-public-key-trace-lookup",
+      "title": "Langfuse Public-Key Trace Lookup",
+      "sourceRepo": {
+        "label": "langfuse/langfuse",
+        "url": "https://github.com/langfuse/langfuse"
+      },
+      "difficulty": 3,
+      "representedDiffLines": 1021,
+      "flawCount": 2,
+      "fileName": "TS-024.json"
+    },
+    {
+      "id": "TS-025",
+      "slug": "TS-025-unkey-api-key-roles",
+      "title": "Unkey API-Key Roles",
+      "sourceRepo": {
+        "label": "unkeyed/unkey",
+        "url": "https://github.com/unkeyed/unkey"
+      },
+      "difficulty": 3,
+      "representedDiffLines": 1273,
+      "flawCount": 2,
+      "fileName": "TS-025.json"
+    },
+    {
+      "id": "TS-026",
+      "slug": "TS-026-triggerdev-org-run-logs",
+      "title": "Trigger.dev Organization Run Logs",
+      "sourceRepo": {
+        "label": "triggerdotdev/trigger.dev",
+        "url": "https://github.com/triggerdotdev/trigger.dev"
+      },
+      "difficulty": 3,
+      "representedDiffLines": 1091,
+      "flawCount": 2,
+      "fileName": "TS-026.json"
+    },
+    {
+      "id": "TS-027",
+      "slug": "TS-027-novu-subscriber-external-id-lookup",
+      "title": "Novu Subscriber External-ID Lookup",
+      "sourceRepo": {
+        "label": "novuhq/novu",
+        "url": "https://github.com/novuhq/novu"
+      },
+      "difficulty": 3,
+      "representedDiffLines": 1344,
+      "flawCount": 2,
+      "fileName": "TS-027.json"
+    },
+    {
+      "id": "TS-028",
+      "slug": "TS-028-medusa-admin-order-note-overrides",
+      "title": "Medusa Admin Order Note Overrides",
+      "sourceRepo": {
+        "label": "medusajs/medusa",
+        "url": "https://github.com/medusajs/medusa"
+      },
+      "difficulty": 3,
+      "representedDiffLines": 1114,
+      "flawCount": 2,
+      "fileName": "TS-028.json"
+    },
+    {
+      "id": "TS-029",
+      "slug": "TS-029-calcom-shared-team-booking-management",
+      "title": "Cal.diy Shared Team Booking Management",
+      "sourceRepo": {
+        "label": "calcom/cal.diy",
+        "url": "https://github.com/calcom/cal.diy"
+      },
+      "difficulty": 3,
+      "representedDiffLines": 1341,
+      "flawCount": 2,
+      "fileName": "TS-029.json"
+    },
+    {
+      "id": "TS-030",
+      "slug": "TS-030-hono-optional-auth-middleware",
+      "title": "Hono Optional Auth Middleware Helper",
+      "sourceRepo": {
+        "label": "honojs/hono",
+        "url": "https://github.com/honojs/hono"
+      },
+      "difficulty": 3,
+      "representedDiffLines": 1152,
+      "flawCount": 2,
+      "fileName": "TS-030.json"
+    },
+    {
+      "id": "TS-031",
+      "slug": "TS-031-langfuse-batch-trace-update-endpoint",
+      "title": "Langfuse Batch Trace Update Endpoint",
+      "sourceRepo": {
+        "label": "langfuse/langfuse",
+        "url": "https://github.com/langfuse/langfuse"
+      },
+      "difficulty": 4,
+      "representedDiffLines": 1423,
+      "flawCount": 2,
+      "fileName": "TS-031.json"
+    },
+    {
+      "id": "TS-032",
+      "slug": "TS-032-triggerdev-scheduled-task-api-cron-contracts",
+      "title": "Trigger.dev Scheduled Task API Cron Contracts",
+      "sourceRepo": {
+        "label": "triggerdotdev/trigger.dev",
+        "url": "https://github.com/triggerdotdev/trigger.dev"
+      },
+      "difficulty": 4,
+      "representedDiffLines": 1231,
+      "flawCount": 2,
+      "fileName": "TS-032.json"
+    },
+    {
+      "id": "TS-033",
+      "slug": "TS-033-directus-nested-saved-filters",
+      "title": "Directus Nested Saved Filters",
+      "sourceRepo": {
+        "label": "directus/directus",
+        "url": "https://github.com/directus/directus"
+      },
+      "difficulty": 4,
+      "representedDiffLines": 1313,
+      "flawCount": 2,
+      "fileName": "TS-033.json"
+    },
+    {
+      "id": "TS-034",
+      "slug": "TS-034-infisical-bulk-secret-json-import",
+      "title": "Infisical Bulk Secret JSON Import",
+      "sourceRepo": {
+        "label": "Infisical/infisical",
+        "url": "https://github.com/Infisical/infisical"
+      },
+      "difficulty": 4,
+      "representedDiffLines": 1588,
+      "flawCount": 2,
+      "fileName": "TS-034.json"
+    },
+    {
+      "id": "TS-035",
+      "slug": "TS-035-novu-synchronous-trigger-and-wait",
+      "title": "Novu Synchronous Trigger-And-Wait API",
+      "sourceRepo": {
+        "label": "novuhq/novu",
+        "url": "https://github.com/novuhq/novu"
+      },
+      "difficulty": 4,
+      "representedDiffLines": 1587,
+      "flawCount": 2,
+      "fileName": "TS-035.json"
+    },
+    {
+      "id": "TS-036",
+      "slug": "TS-036-payload-blocking-post-change-hooks",
+      "title": "Payload Blocking Post-Change Hooks",
+      "sourceRepo": {
+        "label": "payloadcms/payload",
+        "url": "https://github.com/payloadcms/payload"
+      },
+      "difficulty": 4,
+      "representedDiffLines": 1515,
+      "flawCount": 2,
+      "fileName": "TS-036.json"
+    },
+    {
+      "id": "TS-037",
+      "slug": "TS-037-medusa-order-cancellation-workflow-endpoint",
+      "title": "Medusa Order Cancellation Workflow Endpoint",
+      "sourceRepo": {
+        "label": "medusajs/medusa",
+        "url": "https://github.com/medusajs/medusa"
+      },
+      "difficulty": 4,
+      "representedDiffLines": 1429,
+      "flawCount": 2,
+      "fileName": "TS-037.json"
+    },
+    {
+      "id": "TS-038",
+      "slug": "TS-038-unkey-analytics-enrichment-key-verification",
+      "title": "Unkey Analytics Enrichment Key Verification",
+      "sourceRepo": {
+        "label": "unkeyed/unkey",
+        "url": "https://github.com/unkeyed/unkey"
+      },
+      "difficulty": 4,
+      "representedDiffLines": 1652,
+      "flawCount": 2,
+      "fileName": "TS-038.json"
+    },
+    {
+      "id": "TS-039",
+      "slug": "TS-039-calcom-booking-reschedule-api",
+      "title": "Cal.com Booking Reschedule API",
+      "sourceRepo": {
+        "label": "calcom/cal.com",
+        "url": "https://github.com/calcom/cal.com"
+      },
+      "difficulty": 4,
+      "representedDiffLines": 1408,
+      "flawCount": 2,
+      "fileName": "TS-039.json"
+    },
+    {
+      "id": "TS-040",
+      "slug": "TS-040-trpc-batch-error-envelope-changes",
+      "title": "tRPC Batch Error Envelope Changes",
+      "sourceRepo": {
+        "label": "trpc/trpc",
+        "url": "https://github.com/trpc/trpc"
+      },
+      "difficulty": 4,
+      "representedDiffLines": 1404,
+      "flawCount": 2,
+      "fileName": "TS-040.json"
+    },
+    {
+      "id": "TS-041",
+      "slug": "TS-041-triggerdev-retryable-run-completion-callbacks",
+      "title": "Trigger.dev Retryable Run Completion Callbacks",
+      "sourceRepo": {
+        "label": "triggerdotdev/trigger.dev",
+        "url": "https://github.com/triggerdotdev/trigger.dev"
+      },
+      "difficulty": 5,
+      "representedDiffLines": 1450,
+      "flawCount": 2,
+      "fileName": "TS-041.json"
+    },
+    {
+      "id": "TS-042",
+      "slug": "TS-042-novu-digest-flush-worker-per-subscriber",
+      "title": "Novu Digest Flush Worker Per Subscriber",
+      "sourceRepo": {
+        "label": "novuhq/novu",
+        "url": "https://github.com/novuhq/novu"
+      },
+      "difficulty": 5,
+      "representedDiffLines": 1741,
+      "flawCount": 2,
+      "fileName": "TS-042.json"
+    },
+    {
+      "id": "TS-043",
+      "slug": "TS-043-langfuse-trace-compaction-job",
+      "title": "Langfuse Trace Compaction Job",
+      "sourceRepo": {
+        "label": "langfuse/langfuse",
+        "url": "https://github.com/langfuse/langfuse"
+      },
+      "difficulty": 5,
+      "representedDiffLines": 1501,
+      "flawCount": 2,
+      "fileName": "TS-043.json"
+    },
+    {
+      "id": "TS-044",
+      "slug": "TS-044-infisical-certificate-rotation-background-job",
+      "title": "Infisical Certificate Rotation Background Job",
+      "sourceRepo": {
+        "label": "Infisical/infisical",
+        "url": "https://github.com/Infisical/infisical"
+      },
+      "difficulty": 5,
+      "representedDiffLines": 1538,
+      "flawCount": 2,
+      "fileName": "TS-044.json"
+    },
+    {
+      "id": "TS-045",
+      "slug": "TS-045-directus-async-schema-metadata-sync",
+      "title": "Directus Async Schema Metadata Sync",
+      "sourceRepo": {
+        "label": "directus/directus",
+        "url": "https://github.com/directus/directus"
+      },
+      "difficulty": 5,
+      "representedDiffLines": 1893,
+      "flawCount": 2,
+      "fileName": "TS-045.json"
+    },
+    {
+      "id": "TS-046",
+      "slug": "TS-046-medusa-fulfillment-workflow-compensation",
+      "title": "Medusa Fulfillment Workflow Compensation",
+      "sourceRepo": {
+        "label": "medusajs/medusa",
+        "url": "https://github.com/medusajs/medusa"
+      },
+      "difficulty": 5,
+      "representedDiffLines": 1552,
+      "flawCount": 2,
+      "fileName": "TS-046.json"
+    },
+    {
+      "id": "TS-047",
+      "slug": "TS-047-calcom-historical-calendar-sync-backfill",
+      "title": "Cal.com Historical Calendar Sync Backfill",
+      "sourceRepo": {
+        "label": "calcom/cal.diy",
+        "url": "https://github.com/calcom/cal.diy"
+      },
+      "difficulty": 5,
+      "representedDiffLines": 1800,
+      "flawCount": 2,
+      "fileName": "TS-047.json"
+    },
+    {
+      "id": "TS-048",
+      "slug": "TS-048-unkey-hourly-api-usage-rollup-job",
+      "title": "Unkey Hourly API Usage Rollup Job",
+      "sourceRepo": {
+        "label": "unkeyed/unkey",
+        "url": "https://github.com/unkeyed/unkey"
+      },
+      "difficulty": 5,
+      "representedDiffLines": 1622,
+      "flawCount": 2,
+      "fileName": "TS-048.json"
+    },
+    {
+      "id": "TS-049",
+      "slug": "TS-049-bullmq-parent-child-flow-graph-helper",
+      "title": "BullMQ Parent-Child Flow Graph Helper",
+      "sourceRepo": {
+        "label": "taskforcesh/bullmq",
+        "url": "https://github.com/taskforcesh/bullmq"
+      },
+      "difficulty": 5,
+      "representedDiffLines": 1670,
+      "flawCount": 2,
+      "fileName": "TS-049.json"
+    },
+    {
+      "id": "TS-050",
+      "slug": "TS-050-temporal-workflow-deadline-helper",
+      "title": "Temporal Workflow Deadline Helper",
+      "sourceRepo": {
+        "label": "temporalio/sdk-typescript",
+        "url": "https://github.com/temporalio/sdk-typescript"
+      },
+      "difficulty": 5,
+      "representedDiffLines": 1651,
+      "flawCount": 2,
+      "fileName": "TS-050.json"
+    },
+    {
+      "id": "TS-051",
+      "slug": "TS-051-langfuse-high-volume-trace-ingestion-queue",
+      "title": "Langfuse High-Volume Trace Ingestion Queue",
+      "sourceRepo": {
+        "label": "langfuse/langfuse",
+        "url": "https://github.com/langfuse/langfuse"
+      },
+      "difficulty": 6,
+      "representedDiffLines": 1799,
+      "flawCount": 2,
+      "fileName": "TS-051.json"
+    },
+    {
+      "id": "TS-052",
+      "slug": "TS-052-novu-trigger-event-dedupe",
+      "title": "Novu Trigger Event Dedupe",
+      "sourceRepo": {
+        "label": "novuhq/novu",
+        "url": "https://github.com/novuhq/novu"
+      },
+      "difficulty": 6,
+      "representedDiffLines": 1779,
+      "flawCount": 2,
+      "fileName": "TS-052.json"
+    },
+    {
+      "id": "TS-053",
+      "slug": "TS-053-triggerdev-run-event-stream",
+      "title": "Trigger.dev Run Event Stream",
+      "sourceRepo": {
+        "label": "triggerdotdev/trigger.dev",
+        "url": "https://github.com/triggerdotdev/trigger.dev"
+      },
+      "difficulty": 6,
+      "representedDiffLines": 1768,
+      "flawCount": 2,
+      "fileName": "TS-053.json"
+    },
+    {
+      "id": "TS-054",
+      "slug": "TS-054-unkey-gateway-access-log-ingestion",
+      "title": "Unkey Gateway Access-Log Ingestion",
+      "sourceRepo": {
+        "label": "unkeyed/unkey",
+        "url": "https://github.com/unkeyed/unkey"
+      },
+      "difficulty": 6,
+      "representedDiffLines": 1776,
+      "flawCount": 2,
+      "fileName": "TS-054.json"
+    },
+    {
+      "id": "TS-055",
+      "slug": "TS-055-infisical-secret-access-audit-events",
+      "title": "Infisical Secret Access Audit Events",
+      "sourceRepo": {
+        "label": "Infisical/infisical",
+        "url": "https://github.com/Infisical/infisical"
+      },
+      "difficulty": 6,
+      "representedDiffLines": 1801,
+      "flawCount": 2,
+      "fileName": "TS-055.json"
+    },
+    {
+      "id": "TS-056",
+      "slug": "TS-056-directus-activity-stream-collection-changes",
+      "title": "Directus Activity Stream For Collection Changes",
+      "sourceRepo": {
+        "label": "directus/directus",
+        "url": "https://github.com/directus/directus"
+      },
+      "difficulty": 6,
+      "representedDiffLines": 1848,
+      "flawCount": 2,
+      "fileName": "TS-056.json"
+    },
+    {
+      "id": "TS-057",
+      "slug": "TS-057-payload-document-change-stream-api",
+      "title": "Payload Document Change Stream API",
+      "sourceRepo": {
+        "label": "payloadcms/payload",
+        "url": "https://github.com/payloadcms/payload"
+      },
+      "difficulty": 6,
+      "representedDiffLines": 1909,
+      "flawCount": 2,
+      "fileName": "TS-057.json"
+    },
+    {
+      "id": "TS-058",
+      "slug": "TS-058-medusa-inventory-stock-adjusted-events",
+      "title": "Medusa Inventory Stock-Adjusted Events",
+      "sourceRepo": {
+        "label": "medusajs/medusa",
+        "url": "https://github.com/medusajs/medusa"
+      },
+      "difficulty": 6,
+      "representedDiffLines": 1859,
+      "flawCount": 2,
+      "fileName": "TS-058.json"
+    },
+    {
+      "id": "TS-059",
+      "slug": "TS-059-calcom-booking-lifecycle-event-stream",
+      "title": "Cal.com Booking Lifecycle Event Stream",
+      "sourceRepo": {
+        "label": "calcom/cal.diy",
+        "url": "https://github.com/calcom/cal.com"
+      },
+      "difficulty": 6,
+      "representedDiffLines": 2298,
+      "flawCount": 2,
+      "fileName": "TS-059.json"
+    },
+    {
+      "id": "TS-060",
+      "slug": "TS-060-hono-event-ingestion-middleware-serverless",
+      "title": "Hono Event Ingestion Middleware For Serverless Runtimes",
+      "sourceRepo": {
+        "label": "honojs/hono",
+        "url": "https://github.com/honojs/hono"
+      },
+      "difficulty": 6,
+      "representedDiffLines": 1952,
+      "flawCount": 2,
+      "fileName": "TS-060.json"
+    },
+    {
+      "id": "TS-061",
+      "slug": "TS-061-langfuse-dataset-item-csv-import",
+      "title": "Langfuse Dataset Item CSV Import",
+      "sourceRepo": {
+        "label": "langfuse/langfuse",
+        "url": "https://github.com/langfuse/langfuse"
+      },
+      "difficulty": 7,
+      "representedDiffLines": 1950,
+      "flawCount": 2,
+      "fileName": "TS-061.json"
+    },
+    {
+      "id": "TS-062",
+      "slug": "TS-062-triggerdev-cancel-running-task-api",
+      "title": "Trigger.dev Cancel Running Task API",
+      "sourceRepo": {
+        "label": "triggerdotdev/trigger.dev",
+        "url": "https://github.com/triggerdotdev/trigger.dev"
+      },
+      "difficulty": 7,
+      "representedDiffLines": 1992,
+      "flawCount": 2,
+      "fileName": "TS-062.json"
+    },
+    {
+      "id": "TS-063",
+      "slug": "TS-063-novu-global-unsubscribe-endpoint",
+      "title": "Novu Global Unsubscribe Endpoint",
+      "sourceRepo": {
+        "label": "novuhq/novu",
+        "url": "https://github.com/novuhq/novu"
+      },
+      "difficulty": 7,
+      "representedDiffLines": 2398,
+      "flawCount": 2,
+      "fileName": "TS-063.json"
+    },
+    {
+      "id": "TS-064",
+      "slug": "TS-064-infisical-rotate-secret-update-references",
+      "title": "Infisical Rotate Secret And Update References",
+      "sourceRepo": {
+        "label": "Infisical/infisical",
+        "url": "https://github.com/Infisical/infisical"
+      },
+      "difficulty": 7,
+      "representedDiffLines": 2123,
+      "flawCount": 2,
+      "fileName": "TS-064.json"
+    },
+    {
+      "id": "TS-065",
+      "slug": "TS-065-directus-permission-aware-csv-import",
+      "title": "Directus Permission-Aware CSV Import",
+      "sourceRepo": {
+        "label": "directus/directus",
+        "url": "https://github.com/directus/directus"
+      },
+      "difficulty": 7,
+      "representedDiffLines": 2161,
+      "flawCount": 2,
+      "fileName": "TS-065.json"
+    },
+    {
+      "id": "TS-066",
+      "slug": "TS-066-medusa-checkout-submit-endpoint",
+      "title": "Medusa Checkout Submit Endpoint",
+      "sourceRepo": {
+        "label": "medusajs/medusa",
+        "url": "https://github.com/medusajs/medusa"
+      },
+      "difficulty": 7,
+      "representedDiffLines": 2060,
+      "flawCount": 2,
+      "fileName": "TS-066.json"
+    },
+    {
+      "id": "TS-067",
+      "slug": "TS-067-payload-scheduled-publish-background-job",
+      "title": "Payload Scheduled Publish Background Job",
+      "sourceRepo": {
+        "label": "payloadcms/payload",
+        "url": "https://github.com/payloadcms/payload"
+      },
+      "difficulty": 7,
+      "representedDiffLines": 2287,
+      "flawCount": 2,
+      "fileName": "TS-067.json"
+    },
+    {
+      "id": "TS-068",
+      "slug": "TS-068-unkey-immediate-api-key-revocation",
+      "title": "Unkey Immediate API-Key Revocation",
+      "sourceRepo": {
+        "label": "unkeyed/unkey",
+        "url": "https://github.com/unkeyed/unkey"
+      },
+      "difficulty": 7,
+      "representedDiffLines": 2136,
+      "flawCount": 2,
+      "fileName": "TS-068.json"
+    },
+    {
+      "id": "TS-069",
+      "slug": "TS-069-calcom-temporary-booking-holds",
+      "title": "Cal.com Temporary Booking Holds",
+      "sourceRepo": {
+        "label": "calcom/cal.diy",
+        "url": "https://github.com/calcom/cal.com"
+      },
+      "difficulty": 7,
+      "representedDiffLines": 2162,
+      "flawCount": 2,
+      "fileName": "TS-069.json"
+    },
+    {
+      "id": "TS-070",
+      "slug": "TS-070-prisma-migration-generated-runtime-feature",
+      "title": "Prisma Migration-Generated Runtime Feature",
+      "sourceRepo": {
+        "label": "prisma/prisma",
+        "url": "https://github.com/prisma/prisma"
+      },
+      "difficulty": 7,
+      "representedDiffLines": 2179,
+      "flawCount": 2,
+      "fileName": "TS-070.json"
+    },
+    {
+      "id": "TS-071",
+      "slug": "TS-071-langfuse-trace-list-scores-metrics",
+      "title": "Langfuse Trace List Scores And Metrics",
+      "sourceRepo": {
+        "label": "langfuse/langfuse",
+        "url": "https://github.com/langfuse/langfuse"
+      },
+      "difficulty": 8,
+      "representedDiffLines": 2364,
+      "flawCount": 2,
+      "fileName": "TS-071.json"
+    },
+    {
+      "id": "TS-072",
+      "slug": "TS-072-directus-permission-aware-relational-filters",
+      "title": "Directus Permission-Aware Relational Filters",
+      "sourceRepo": {
+        "label": "directus/directus",
+        "url": "https://github.com/directus/directus"
+      },
+      "difficulty": 8,
+      "representedDiffLines": 2229,
+      "flawCount": 2,
+      "fileName": "TS-072.json"
+    },
+    {
+      "id": "TS-073",
+      "slug": "TS-073-novu-notification-search-by-payload-fields",
+      "title": "Novu Notification Search By Payload Fields",
+      "sourceRepo": {
+        "label": "novuhq/novu",
+        "url": "https://github.com/novuhq/novu"
+      },
+      "difficulty": 8,
+      "representedDiffLines": 2281,
+      "flawCount": 2,
+      "fileName": "TS-073.json"
+    },
+    {
+      "id": "TS-074",
+      "slug": "TS-074-infisical-encrypted-secret-value-search",
+      "title": "Infisical Encrypted Secret Value Search",
+      "sourceRepo": {
+        "label": "Infisical/infisical",
+        "url": "https://github.com/Infisical/infisical"
+      },
+      "difficulty": 8,
+      "representedDiffLines": 2381,
+      "flawCount": 2,
+      "fileName": "TS-074.json"
+    },
+    {
+      "id": "TS-075",
+      "slug": "TS-075-triggerdev-dashboard-run-counters",
+      "title": "Trigger.dev Dashboard Run Counters",
+      "sourceRepo": {
+        "label": "triggerdotdev/trigger.dev",
+        "url": "https://github.com/triggerdotdev/trigger.dev"
+      },
+      "difficulty": 8,
+      "representedDiffLines": 2338,
+      "flawCount": 2,
+      "fileName": "TS-075.json"
+    },
+    {
+      "id": "TS-076",
+      "slug": "TS-076-medusa-bulk-sku-availability-check",
+      "title": "Medusa Bulk SKU Availability Check",
+      "sourceRepo": {
+        "label": "medusajs/medusa",
+        "url": "https://github.com/medusajs/medusa"
+      },
+      "difficulty": 8,
+      "representedDiffLines": 2339,
+      "flawCount": 2,
+      "fileName": "TS-076.json"
+    },
+    {
+      "id": "TS-077",
+      "slug": "TS-077-payload-per-document-access-hooks-list-api",
+      "title": "Payload Per-Document Access Hooks In List API",
+      "sourceRepo": {
+        "label": "payloadcms/payload",
+        "url": "https://github.com/payloadcms/payload"
+      },
+      "difficulty": 8,
+      "representedDiffLines": 2663,
+      "flawCount": 2,
+      "fileName": "TS-077.json"
+    },
+    {
+      "id": "TS-078",
+      "slug": "TS-078-unkey-global-customer-rate-limit-bucket",
+      "title": "Unkey Global Per-Customer Rate-Limit Bucket",
+      "sourceRepo": {
+        "label": "unkeyed/unkey",
+        "url": "https://github.com/unkeyed/unkey"
+      },
+      "difficulty": 8,
+      "representedDiffLines": 2716,
+      "flawCount": 2,
+      "fileName": "TS-078.json"
+    },
+    {
+      "id": "TS-079",
+      "slug": "TS-079-calcom-multi-user-team-availability-preview",
+      "title": "Cal.com Multi-User Team Availability Preview",
+      "sourceRepo": {
+        "label": "calcom/cal.diy",
+        "url": "https://github.com/calcom/cal.diy"
+      },
+      "difficulty": 8,
+      "representedDiffLines": 2572,
+      "flawCount": 2,
+      "fileName": "TS-079.json"
+    },
+    {
+      "id": "TS-080",
+      "slug": "TS-080-drizzle-relation-filter-helper",
+      "title": "Drizzle Relation Filter Helper",
+      "sourceRepo": {
+        "label": "drizzle-team/drizzle-orm",
+        "url": "https://github.com/drizzle-team/drizzle-orm"
+      },
+      "difficulty": 8,
+      "representedDiffLines": 2694,
+      "flawCount": 2,
+      "fileName": "TS-080.json"
+    },
+    {
+      "id": "TS-081",
+      "slug": "TS-081-langfuse-generic-event-processor-abstraction",
+      "title": "Langfuse Generic Event Processor Abstraction",
+      "sourceRepo": {
+        "label": "langfuse/langfuse",
+        "url": "https://github.com/langfuse/langfuse"
+      },
+      "difficulty": 9,
+      "representedDiffLines": 2500,
+      "flawCount": 2,
+      "fileName": "TS-081.json"
+    },
+    {
+      "id": "TS-082",
+      "slug": "TS-082-triggerdev-runner-owned-run-dtos-persistence",
+      "title": "Trigger.dev Runner-Owned Run DTOs And Persistence",
+      "sourceRepo": {
+        "label": "triggerdotdev/trigger.dev",
+        "url": "https://github.com/triggerdotdev/trigger.dev"
+      },
+      "difficulty": 9,
+      "representedDiffLines": 2664,
+      "flawCount": 2,
+      "fileName": "TS-082.json"
+    },
+    {
+      "id": "TS-083",
+      "slug": "TS-083-infisical-generic-secret-certificate-resources",
+      "title": "Infisical Generic Secret And Certificate Resources",
+      "sourceRepo": {
+        "label": "Infisical/infisical",
+        "url": "https://github.com/Infisical/infisical"
+      },
+      "difficulty": 9,
+      "representedDiffLines": 3178,
+      "flawCount": 2,
+      "fileName": "TS-083.json"
+    },
+    {
+      "id": "TS-084",
+      "slug": "TS-084-directus-permission-sql-compiler",
+      "title": "Directus Permission SQL Compiler",
+      "sourceRepo": {
+        "label": "directus/directus",
+        "url": "https://github.com/directus/directus"
+      },
+      "difficulty": 9,
+      "representedDiffLines": 2696,
+      "flawCount": 2,
+      "fileName": "TS-084.json"
+    },
+    {
+      "id": "TS-085",
+      "slug": "TS-085-novu-provider-specific-workflow-executor-branches",
+      "title": "Novu Provider-Specific Workflow Executor Branches",
+      "sourceRepo": {
+        "label": "novuhq/novu",
+        "url": "https://github.com/novuhq/novu"
+      },
+      "difficulty": 9,
+      "representedDiffLines": 2804,
+      "flawCount": 2,
+      "fileName": "TS-085.json"
+    },
+    {
+      "id": "TS-086",
+      "slug": "TS-086-medusa-direct-inventory-reservation-workflow-step",
+      "title": "Medusa Direct Inventory Reservation Workflow Step",
+      "sourceRepo": {
+        "label": "medusajs/medusa",
+        "url": "https://github.com/medusajs/medusa"
+      },
+      "difficulty": 9,
+      "representedDiffLines": 3110,
+      "flawCount": 2,
+      "fileName": "TS-086.json"
+    },
+    {
+      "id": "TS-087",
+      "slug": "TS-087-payload-database-specific-access-hints",
+      "title": "Payload Database-Specific Access Hints",
+      "sourceRepo": {
+        "label": "payloadcms/payload",
+        "url": "https://github.com/payloadcms/payload"
+      },
+      "difficulty": 9,
+      "representedDiffLines": 3130,
+      "flawCount": 2,
+      "fileName": "TS-087.json"
+    },
+    {
+      "id": "TS-088",
+      "slug": "TS-088-unkey-dashboard-orm-in-gateway-verification",
+      "title": "Unkey Dashboard ORM In Gateway Verification",
+      "sourceRepo": {
+        "label": "unkeyed/unkey",
+        "url": "https://github.com/unkeyed/unkey"
+      },
+      "difficulty": 9,
+      "representedDiffLines": 3200,
+      "flawCount": 2,
+      "fileName": "TS-088.json"
+    },
+    {
+      "id": "TS-089",
+      "slug": "TS-089-calcom-next-session-in-availability-package",
+      "title": "Cal.com Next Session In Availability Package",
+      "sourceRepo": {
+        "label": "calcom/cal.diy",
+        "url": "https://github.com/calcom/cal.diy"
+      },
+      "difficulty": 9,
+      "representedDiffLines": 3300,
+      "flawCount": 2,
+      "fileName": "TS-089.json"
+    },
+    {
+      "id": "TS-090",
+      "slug": "TS-090-nestjs-global-request-context-singleton",
+      "title": "NestJS Global Request Context Singleton",
+      "sourceRepo": {
+        "label": "nestjs/nest",
+        "url": "https://github.com/nestjs/nest"
+      },
+      "difficulty": 9,
+      "representedDiffLines": 3400,
+      "flawCount": 2,
+      "fileName": "TS-090.json"
+    },
+    {
+      "id": "TS-091",
+      "slug": "TS-091-langfuse-multi-region-trace-ingestion-replication",
+      "title": "Langfuse Multi-Region Trace Ingestion And Replication",
+      "sourceRepo": {
+        "label": "langfuse/langfuse",
+        "url": "https://github.com/langfuse/langfuse"
+      },
+      "difficulty": 10,
+      "representedDiffLines": 3000,
+      "flawCount": 2,
+      "fileName": "TS-091.json"
+    },
+    {
+      "id": "TS-092",
+      "slug": "TS-092-triggerdev-deployment-snapshots-task-definitions",
+      "title": "Trigger.dev Deployment Snapshots For Task Definitions",
+      "sourceRepo": {
+        "label": "triggerdotdev/trigger.dev",
+        "url": "https://github.com/triggerdotdev/trigger.dev"
+      },
+      "difficulty": 10,
+      "representedDiffLines": 3540,
+      "flawCount": 2,
+      "fileName": "TS-092.json"
+    },
+    {
+      "id": "TS-093",
+      "slug": "TS-093-infisical-cross-org-project-clone",
+      "title": "Infisical Cross-Org Project Clone",
+      "sourceRepo": {
+        "label": "Infisical/infisical",
+        "url": "https://github.com/Infisical/infisical"
+      },
+      "difficulty": 10,
+      "representedDiffLines": 3700,
+      "flawCount": 2,
+      "fileName": "TS-093.json"
+    },
+    {
+      "id": "TS-094",
+      "slug": "TS-094-directus-permission-aware-export-search",
+      "title": "Directus Permission-Aware Export And Search",
+      "sourceRepo": {
+        "label": "directus/directus",
+        "url": "https://github.com/directus/directus"
+      },
+      "difficulty": 10,
+      "representedDiffLines": 3900,
+      "flawCount": 2,
+      "fileName": "TS-094.json"
+    },
+    {
+      "id": "TS-095",
+      "slug": "TS-095-novu-workflow-v2-migration-engine",
+      "title": "Novu Workflow V2 Migration Engine",
+      "sourceRepo": {
+        "label": "novuhq/novu",
+        "url": "https://github.com/novuhq/novu"
+      },
+      "difficulty": 10,
+      "representedDiffLines": 4050,
+      "flawCount": 2,
+      "fileName": "TS-095.json"
+    },
+    {
+      "id": "TS-096",
+      "slug": "TS-096-medusa-inventory-availability-service-rewrite",
+      "title": "Medusa Inventory Availability Service Rewrite",
+      "sourceRepo": {
+        "label": "medusajs/medusa",
+        "url": "https://github.com/medusajs/medusa"
+      },
+      "difficulty": 10,
+      "representedDiffLines": 4120,
+      "flawCount": 2,
+      "fileName": "TS-096.json"
+    },
+    {
+      "id": "TS-097",
+      "slug": "TS-097-payload-adapter-specific-access-evaluators",
+      "title": "Payload Adapter-Specific Access Evaluators",
+      "sourceRepo": {
+        "label": "payloadcms/payload",
+        "url": "https://github.com/payloadcms/payload"
+      },
+      "difficulty": 10,
+      "representedDiffLines": 4200,
+      "flawCount": 2,
+      "fileName": "TS-097.json"
+    },
+    {
+      "id": "TS-098",
+      "slug": "TS-098-unkey-global-api-key-verification",
+      "title": "Unkey Global API-Key Verification",
+      "sourceRepo": {
+        "label": "unkeyed/unkey",
+        "url": "https://github.com/unkeyed/unkey"
+      },
+      "difficulty": 10,
+      "representedDiffLines": 4300,
+      "flawCount": 2,
+      "fileName": "TS-098.json"
+    },
+    {
+      "id": "TS-099",
+      "slug": "TS-099-calcom-team-availability-precompute-rewrite",
+      "title": "Cal.com Team Availability Precompute Rewrite",
+      "sourceRepo": {
+        "label": "calcom/cal.diy",
+        "url": "https://github.com/calcom/cal.diy"
+      },
+      "difficulty": 10,
+      "representedDiffLines": 4400,
+      "flawCount": 2,
+      "fileName": "TS-099.json"
+    },
+    {
+      "id": "TS-100",
+      "slug": "TS-100-triggerdev-platform-event-timeline-capstone",
+      "title": "Trigger.dev Platform Event Timeline Capstone",
+      "sourceRepo": {
+        "label": "triggerdotdev/trigger.dev",
+        "url": "https://github.com/triggerdotdev/trigger.dev"
+      },
+      "difficulty": 10,
+      "representedDiffLines": 4800,
+      "flawCount": 3,
+      "fileName": "TS-100.json"
+    }
+  ]
+}
