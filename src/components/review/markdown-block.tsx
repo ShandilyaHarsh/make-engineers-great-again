@@ -1,6 +1,15 @@
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-export function MarkdownBlock({ value, className }: { value: string; className?: string }) {
+export function MarkdownBlock({
+  value,
+  className,
+  renderInline,
+}: {
+  value: string;
+  className?: string;
+  renderInline?: (value: string) => ReactNode;
+}) {
   const blocks = value
     .trim()
     .split(/\n{2,}/)
@@ -10,12 +19,14 @@ export function MarkdownBlock({ value, className }: { value: string; className?:
   return (
     <div className={cn("space-y-3 text-sm leading-6 text-ink", className)}>
       {blocks.map((block, index) => {
+        const inlineRenderer = renderInline ?? inline;
+
         if (block.startsWith("- ")) {
           return (
             <ul key={index} className="space-y-1 pl-4">
               {block.split("\n").map((line, itemIndex) => (
                 <li key={itemIndex} className="list-disc text-pretty">
-                  {inline(line.replace(/^-\s+/, ""))}
+                  {inlineRenderer(line.replace(/^-\s+/, ""))}
                 </li>
               ))}
             </ul>
@@ -27,7 +38,7 @@ export function MarkdownBlock({ value, className }: { value: string; className?:
             <ol key={index} className="space-y-1 pl-4">
               {block.split("\n").map((line, itemIndex) => (
                 <li key={itemIndex} className="list-decimal text-pretty">
-                  {inline(line.replace(/^\d+\.\s+/, ""))}
+                  {inlineRenderer(line.replace(/^\d+\.\s+/, ""))}
                 </li>
               ))}
             </ol>
@@ -44,7 +55,7 @@ export function MarkdownBlock({ value, className }: { value: string; className?:
 
         return (
           <p key={index} className="text-pretty text-muted">
-            {inline(block)}
+            {inlineRenderer(block)}
           </p>
         );
       })}

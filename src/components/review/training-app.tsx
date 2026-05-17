@@ -39,6 +39,8 @@ import type {
 import { cn, compactNumber, formatVerdict } from "@/lib/utils";
 
 const STORAGE_KEY = "mega.review.progress.v1";
+const fileReferencePattern = /(?:[\w@.$[\]-]+\/)*[\w@.$[\]-]+\.(?:ts|tsx|js|jsx|sql|prisma|md|go)/g;
+const identifierReferencePattern = /\b[A-Za-z_$][\w$]*\b/g;
 
 const emptyProgress: StoredProgress = {
   currentExerciseId: "TS-001",
@@ -65,6 +67,16 @@ type SymbolDefinition = CodeLocation & {
 };
 
 type SymbolIndex = Map<string, SymbolDefinition[]>;
+
+type TextReference = CodeLocation & {
+  kind: "file" | "import" | "definition" | "occurrence";
+  source?: string;
+};
+
+type TextReferenceIndex = {
+  files: Map<string, TextReference>;
+  symbols: Map<string, TextReference[]>;
+};
 
 type CodeIndexLine = {
   content: string;
@@ -177,6 +189,11 @@ export function TrainingApp() {
     [codeFiles]
   );
 
+  const textReferenceIndex = useMemo(
+    () => buildTextReferenceIndex(codeFiles.map((entry) => entry.file), symbolIndex),
+    [codeFiles, symbolIndex]
+  );
+
   const completedCount = useMemo(() => {
     if (!index) return 0;
     return index.exercises.filter((item) => progress.exercises[item.id]?.submitted).length;
@@ -201,12 +218,29 @@ export function TrainingApp() {
   }
 
   function jumpToDefinition(definition: SymbolDefinition) {
-    const targetFile = codeFiles.find((entry) => entry.file.newPath === definition.filePath);
+    jumpToCodeLocation(definition);
+  }
+
+  function jumpToCodeLocation(location: CodeLocation) {
+    const targetFile = codeFiles.find(
+      (entry) => entry.file.newPath === location.filePath || entry.file.oldPath === location.filePath
+    );
     if (targetFile) setSelectedFileKey(targetFile.key);
+    switchTab("code");
     setJumpTarget({
-      filePath: definition.filePath,
-      lineNumber: definition.lineNumber,
+      filePath: targetFile?.file.newPath ?? location.filePath,
+      lineNumber: location.lineNumber,
     });
+  }
+
+  function renderInlineReferences(value: string) {
+    return (
+      <InlineReferenceText
+        value={value}
+        referenceIndex={textReferenceIndex}
+        onNavigate={jumpToCodeLocation}
+      />
+    );
   }
 
   useEffect(() => {
@@ -496,12 +530,12 @@ export function TrainingApp() {
                   <h2 className="text-sm font-semibold">Description</h2>
                 </div>
                 <div className="space-y-5 p-4">
-                  <MarkdownBlock value={exercise.prDescription} />
+                  <MarkdownBlock value={exercise.prDescription} renderInline={renderInlineReferences} />
                   <div>
                     <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
                       Existing Contracts
                     </h3>
-                    <MarkdownBlock value={exercise.existingCodeContext} />
+                    <MarkdownBlock value={exercise.existingCodeContext} renderInline={renderInlineReferences} />
                   </div>
                 </div>
               </Panel>
@@ -512,7 +546,7 @@ export function TrainingApp() {
                     <h2 className="text-sm font-semibold">Review Task</h2>
                   </div>
                   <div className="p-4">
-                    <MarkdownBlock value={exercise.learnerTask} />
+                    <MarkdownBlock value={exercise.learnerTask} renderInline={renderInlineReferences} />
                   </div>
                 </Panel>
                 <Panel className="overflow-hidden">
@@ -715,7 +749,7 @@ export function TrainingApp() {
                       {flaw.hints.slice(0, flawProgress.revealedHints).map((hint, index) => (
                         <div key={index} className="rounded-md bg-warning/10 p-2 text-xs leading-5 text-ink">
                           <span className="font-semibold tabular-nums">Hint {index + 1}: </span>
-                          {hint}
+                          {renderInlineReferences(hint)}
                         </div>
                       ))}
                       {flawProgress.revealedHints < flaw.hints.length ? (
@@ -738,13 +772,18 @@ export function TrainingApp() {
                     {currentProgress.submitted ? (
                       <div className="mt-3 space-y-3 rounded-md bg-surface p-3 shadow-[inset_0_0_0_1px_hsl(var(--line))]">
                         {flawProgress.rationale ? (
-                          <p className="text-xs leading-5 text-muted">{flawProgress.rationale}</p>
+                          <p className="text-xs leading-5 text-muted">
+                            {renderInlineReferences(flawProgress.rationale)}
+                          </p>
                         ) : null}
                         <div>
                           <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
                             Golden Answer
                           </h4>
-                          <MarkdownBlock value={flaw.goldenAnswer || flaw.expectedIdentification} />
+                          <MarkdownBlock
+                            value={flaw.goldenAnswer || flaw.expectedIdentification}
+                            renderInline={renderInlineReferences}
+                          />
                         </div>
                       </div>
                     ) : null}
@@ -770,7 +809,7 @@ export function TrainingApp() {
                       <h3 className="text-sm font-semibold">Expert Debrief</h3>
                     </div>
                     <div className="p-4">
-                      <MarkdownBlock value={exercise.debrief.raw} />
+                      <MarkdownBlock value={exercise.debrief.raw} renderInline={renderInlineReferences} />
                     </div>
                   </Panel>
 
@@ -990,6 +1029,273 @@ function FileSection({
 
 function fileNameForDisplay(filePath: string) {
   return filePath.split("/").pop() ?? filePath;
+}
+
+function InlineReferenceText({
+  value,
+  referenceIndex,
+  onNavigate,
+}: {
+  value: string;
+  referenceIndex: TextReferenceIndex;
+  onNavigate: (location: CodeLocation) => void;
+}) {
+  const segments = value.split(/(`[^`]+`)/g);
+
+  return (
+    <>
+      {segments.map((segment, segmentIndex) => {
+        const codeLike = segment.startsWith("`") && segment.endsWith("`");
+        const text = codeLike ? segment.slice(1, -1) : segment;
+        const parts = tokenizeTextReferences(text, referenceIndex);
+
+        return parts.map((part, partIndex) => {
+          const key = `${segmentIndex}-${partIndex}-${part.value}`;
+
+          if (part.type === "text") {
+            return codeLike ? (
+              <code key={key} className="rounded bg-panel px-1 py-0.5 font-mono text-[0.92em] text-ink">
+                {part.value}
+              </code>
+            ) : (
+              <span key={key}>{part.value}</span>
+            );
+          }
+
+          return (
+            <button
+              key={key}
+              type="button"
+              title={textReferenceTitle(part.reference)}
+              className={cn(
+                "inline appearance-none rounded-sm border-0 bg-transparent p-0 font-mono text-[0.95em] text-accent underline decoration-accent/45 underline-offset-2 outline-none transition-[background-color,color,box-shadow] hover:bg-accent/10 hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/35",
+                codeLike && "px-1 py-0.5"
+              )}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onNavigate(part.reference);
+              }}
+            >
+              {part.value}
+            </button>
+          );
+        });
+      })}
+    </>
+  );
+}
+
+type TextReferencePart =
+  | {
+      type: "text";
+      value: string;
+    }
+  | {
+      type: "reference";
+      value: string;
+      reference: TextReference;
+    };
+
+function tokenizeTextReferences(value: string, referenceIndex: TextReferenceIndex): TextReferencePart[] {
+  if (!value || (referenceIndex.files.size === 0 && referenceIndex.symbols.size === 0)) {
+    return [{ type: "text", value }];
+  }
+
+  const matches: Array<{
+    start: number;
+    end: number;
+    value: string;
+    reference: TextReference;
+  }> = [];
+
+  for (const match of value.matchAll(fileReferencePattern)) {
+    const rawPath = match[0];
+    const start = match.index;
+    if (start === undefined) continue;
+
+    const reference = referenceIndex.files.get(rawPath);
+    if (!reference) continue;
+
+    matches.push({
+      start,
+      end: start + rawPath.length,
+      value: rawPath,
+      reference,
+    });
+  }
+
+  for (const match of value.matchAll(identifierReferencePattern)) {
+    const name = match[0];
+    const start = match.index;
+    if (start === undefined || isInsideRange(start, matches)) continue;
+
+    const reference = resolveTextSymbolReference(name, value, start, referenceIndex);
+    if (!reference) continue;
+
+    matches.push({
+      start,
+      end: start + name.length,
+      value: name,
+      reference,
+    });
+  }
+
+  if (matches.length === 0) return [{ type: "text", value }];
+
+  const parts: TextReferencePart[] = [];
+  let cursor = 0;
+
+  for (const match of matches.sort((a, b) => a.start - b.start || b.end - a.end)) {
+    if (match.start < cursor) continue;
+    if (match.start > cursor) {
+      parts.push({ type: "text", value: value.slice(cursor, match.start) });
+    }
+    parts.push({
+      type: "reference",
+      value: match.value,
+      reference: match.reference,
+    });
+    cursor = match.end;
+  }
+
+  if (cursor < value.length) {
+    parts.push({ type: "text", value: value.slice(cursor) });
+  }
+
+  return parts;
+}
+
+function buildTextReferenceIndex(files: DiffFile[], symbolIndex: SymbolIndex): TextReferenceIndex {
+  const referenceIndex: TextReferenceIndex = {
+    files: new Map(),
+    symbols: new Map(),
+  };
+  const basenameCounts = new Map<string, number>();
+
+  for (const file of files) {
+    const basename = fileNameForDisplay(file.newPath);
+    basenameCounts.set(basename, (basenameCounts.get(basename) ?? 0) + 1);
+  }
+
+  for (const file of files) {
+    const lineNumber = firstLineNumber(file);
+    const fileReference: TextReference = {
+      kind: "file",
+      filePath: file.newPath,
+      lineNumber,
+    };
+    referenceIndex.files.set(file.newPath, fileReference);
+
+    const basename = fileNameForDisplay(file.newPath);
+    if (basenameCounts.get(basename) === 1) {
+      referenceIndex.files.set(basename, fileReference);
+    }
+  }
+
+  for (const definitions of symbolIndex.values()) {
+    for (const definition of definitions) {
+      addTextSymbolReference(referenceIndex, definition.name, {
+        kind: definition.kind,
+        source: definition.source,
+        filePath: definition.filePath,
+        lineNumber: definition.lineNumber,
+      });
+    }
+  }
+
+  for (const file of files) {
+    for (const line of getIndexableLines(file)) {
+      for (const match of line.content.matchAll(callTargetPattern)) {
+        const name = match[1];
+        const start = match.index;
+        if (!name || start === undefined || nonNavigableCallNames.has(name) || isPropertyAccess(line.content, start)) {
+          continue;
+        }
+
+        addTextSymbolReference(referenceIndex, name, {
+          kind: "occurrence",
+          filePath: line.filePath,
+          lineNumber: line.lineNumber,
+        });
+      }
+    }
+  }
+
+  return referenceIndex;
+}
+
+function addTextSymbolReference(referenceIndex: TextReferenceIndex, name: string, reference: TextReference) {
+  const references = referenceIndex.symbols.get(name) ?? [];
+  const alreadyExists = references.some(
+    (existing) => existing.filePath === reference.filePath && existing.lineNumber === reference.lineNumber
+  );
+  if (!alreadyExists) references.push(reference);
+  referenceIndex.symbols.set(name, references);
+}
+
+function resolveTextSymbolReference(
+  name: string,
+  text: string,
+  start: number,
+  referenceIndex: TextReferenceIndex
+) {
+  const references = referenceIndex.symbols.get(name);
+  if (!references || nonNavigableCallNames.has(name)) return null;
+
+  const nearbyFile = findNearbyFileReference(text, start, referenceIndex);
+  const scopedReferences = nearbyFile
+    ? references.filter((reference) => reference.filePath === nearbyFile.filePath)
+    : references;
+  const candidates = scopedReferences.length > 0 ? scopedReferences : references;
+
+  return (
+    candidates.find((reference) => reference.kind === "definition") ??
+    candidates.find((reference) => reference.kind === "occurrence") ??
+    candidates[0] ??
+    null
+  );
+}
+
+function findNearbyFileReference(text: string, start: number, referenceIndex: TextReferenceIndex) {
+  const windowStart = Math.max(0, start - 140);
+  const windowEnd = Math.min(text.length, start + 180);
+  const nearbyText = text.slice(windowStart, windowEnd);
+
+  for (const match of nearbyText.matchAll(fileReferencePattern)) {
+    const reference = referenceIndex.files.get(match[0]);
+    if (reference) return reference;
+  }
+
+  return null;
+}
+
+function firstLineNumber(file: DiffFile) {
+  for (const hunk of file.hunks) {
+    for (const line of hunk.lines) {
+      const lineNumber = line.newLine ?? line.oldLine;
+      if (lineNumber) return lineNumber;
+    }
+  }
+
+  return 1;
+}
+
+function isInsideRange(index: number, ranges: Array<{ start: number; end: number }>) {
+  return ranges.some((range) => index >= range.start && index < range.end);
+}
+
+function textReferenceTitle(reference: TextReference) {
+  const kind =
+    reference.kind === "file"
+      ? "file"
+      : reference.kind === "import" && reference.source
+        ? `import from ${reference.source}`
+      : reference.kind === "occurrence"
+        ? "visible code occurrence"
+        : reference.kind;
+
+  return `Jump to ${kind} at ${reference.filePath}:${reference.lineNumber}`;
 }
 
 function diffFileKey(file: DiffFile) {
