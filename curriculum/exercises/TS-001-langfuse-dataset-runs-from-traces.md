@@ -930,9 +930,9 @@ Expected answer:
 
 Hints:
 
-1. Look at the ownership boundary between a dataset and the trace ids supplied by the client.
-2. Compare the new helper signature with the existing project-scoped helpers: `getObservationById` in `web/src/pages/api/public/dataset-run-items.ts` and `getTraceById` in `packages/shared/src/server/repositories/traces.ts`.
-3. The dangerous query is the raw trace lookup in `getTraceCandidatesForDatasetRun`; it never mentions `projectId`.
+1. Start at the boundary where client-supplied trace ids become dataset run items. Which existing product owner has to authorize those ids?
+2. Compare the helper shapes: `getObservationById` in `web/src/pages/api/public/dataset-run-items.ts` and `getTraceById` in `packages/shared/src/server/repositories/traces.ts` with the new bulk trace helper. Which caller context does the older contract carry through?
+3. Follow `getTraceCandidatesForDatasetRun` down to its storage predicate. Which part of the authenticated request disappears before trace rows are selected?
 
 ### Flaw 2: The PR lets caller-controlled historical time become creation/ingestion time
 
@@ -950,7 +950,7 @@ Hints:
 
 1. Ask what `createdAt` means for a newly-created dataset run item.
 2. Follow `createdAtByTraceId` into `resolveItemCreatedAt`, then into `buildRunItemEvent`.
-3. The internal event timestamp is being set to a user-provided or trace-observed time instead of the time the mutation was accepted.
+3. Compare the timestamp that describes source trace history with the timestamp that orders the new mutation event. Are they the same product fact?
 
 ## Final Expert Debrief
 

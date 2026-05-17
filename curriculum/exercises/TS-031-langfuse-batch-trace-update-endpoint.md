@@ -1525,8 +1525,8 @@ Hints:
 Hints:
 
 1. Follow the `for (const item of updates)` loop and mark the first line where a write can happen.
-2. Now find the line where a later trace can throw `ForbiddenError`.
-3. A server returns `403`, but one trace has changed. What promise did the API just fail to keep?
+2. Follow the loop after at least one trace mutation succeeds. What happens if authorization fails on a later item?
+3. Compare the HTTP status contract with the per-item mutation timeline. Can the caller know which changes are durable?
 
 ## Expert Debrief
 

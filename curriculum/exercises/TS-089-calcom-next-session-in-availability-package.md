@@ -3386,7 +3386,7 @@ Look at the new package API. Can a Nest service, worker, CLI, or unit test call 
 A reusable package should usually accept an explicit actor/context object. Importing `next`, `next-auth`, and web auth options turns a domain package into a web runtime package.
 
 ### Hint 3
-When API v2 and jobs start building synthetic Next requests, the abstraction has already leaked.
+Search for places where non-Next callers construct request-shaped objects. What does that say about the package boundary?
 
 ### Expected Identification
 The new availability package depends on Next/NextAuth runtime concerns. `packages/availability-core/src/actor.ts:1-45` imports `NextApiRequest`, `NextApiResponse`, `next-auth/next`, and auth options, then resolves the actor internally. `packages/availability-core/src/getAvailabilityForViewer.ts:15-45` requires `req` and `res` and builds a tRPC-like context from the resolved session. `packages/availability-core/src/availabilityPackageFacade.ts:1-27` makes the public package API accept Next request/response objects. The Nest API adapter has to manufacture a Next-shaped request in `apps/api/v2/src/modules/slots/slots-2024-09-04/services/slots.service.ts:14-55`, and the background job does the same in `packages/jobs/src/availability/recomputeAvailabilityWindows.job.ts:13-45`. The package metadata cements the runtime leak by adding `next`, `next-auth`, and `@sentry/nextjs` in `packages/availability-core/package.json:11-20`.

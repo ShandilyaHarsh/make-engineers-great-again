@@ -16336,7 +16336,7 @@
       "hints": [
         "Count how many repository calls happen after candidateTraces comes back.",
         "Ask what happens when a project has 100 traces on a page and each trace has many observations and scores.",
-        "Compare this with a set-based table query that aggregates scores/observations by trace_id once and joins the result to the trace page."
+        "Ask whether enrichment is a per-trace operation or a page-level query contract."
       ]
     },
     {

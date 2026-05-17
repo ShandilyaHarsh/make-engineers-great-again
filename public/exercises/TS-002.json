@@ -7090,7 +7090,7 @@
       "hints": [
         "Compare the new service to the existing v2 slots endpoint path: apps/api/v2/src/modules/slots/slots-2024-09-04/services/slots.service.ts delegates to getAvailableSlotsService().getAvailableSlots in packages/trpc/server/routers/viewer/slots/util.ts.",
         "Ask whether \"schedule availability minus accepted bookings\" is the full Cal.diy availability contract.",
-        "The dangerous code is the loop that reads host.schedule?.availability ?? eventType.availability instead of delegating to AvailableSlotsService."
+        "In the bulk preview service, find the loop that constructs candidate windows from host/event schedules. Which capabilities from AvailableSlotsService are absent from that path?"
       ]
     },
     {

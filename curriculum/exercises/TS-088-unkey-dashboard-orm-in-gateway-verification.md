@@ -3302,10 +3302,10 @@ Keep gateway verification behind a compact verification read model or `KeyServic
 Compare the new gateway environment variables with what a regional gateway should need to verify API keys.
 
 ### Hint 2
-If leaking a gateway node now leaks dashboard database credentials, vault access, root keys, and auth-provider secrets, the deployment boundary has changed.
+Compare the secrets needed by a regional verifier with the secrets now present in the gateway deployment.
 
 ### Hint 3
-Data-plane services should usually have scoped read-only credentials or signed access to a verification service, not the dashboard admin secret bundle.
+Ask which credential set belongs in a data-plane service versus a dashboard/control-plane service.
 
 ### Expected Identification
 The PR expands the gateway secret set to dashboard/admin credentials. `apps/gateway/src/env.ts:3-45` adds dashboard primary database credentials plus `CLERK_SECRET_KEY`, `VAULT_TOKEN`, `CTRL_API_KEY`, `UNKEY_ROOT_KEY`, ClickHouse, and OpenAI variables to the gateway env. `apps/gateway/src/verify/dashboard-db.ts:16-39` consumes the dashboard env and creates a MySQL pool with the dashboard database password. `apps/gateway/src/verify/verify-key-with-dashboard-orm.ts:85-111` uses `VAULT_TOKEN` and `UNKEY_ROOT_KEY` during verification. The tests normalize this by mocking those secrets in `apps/gateway/src/verify/verify-key-with-dashboard-orm.test.ts:17-31`, and the docs recommend copying the dashboard secret bundle into every gateway region in `docs/engineering/gateway/dashboard-orm-verification.md:16-23`.

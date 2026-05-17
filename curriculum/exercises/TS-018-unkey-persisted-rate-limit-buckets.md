@@ -1227,7 +1227,7 @@ Hints:
 
 1. Compare the new unique index to `counterKey` in the existing limiter at `internal/services/ratelimit/keys.go`.
 2. In this codebase, `Namespace` is not globally unique.
-3. The test named `NamespaceReuseAcrossWorkspaces` is actually blessing the bug.
+3. Read `NamespaceReuseAcrossWorkspaces` as a product scenario. What should two workspaces sharing a namespace string prove about the key shape?
 
 ### Flaw 2: Bucket Windows Use Local Wall-Clock Time Instead Of The Request Sequence Contract
 

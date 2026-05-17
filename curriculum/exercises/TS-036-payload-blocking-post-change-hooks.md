@@ -1626,7 +1626,7 @@ Hints:
 
 1. Look at what happens when the first hook succeeds and the second hook throws.
 2. Compare database rollback with an external webhook or search write. Can Payload undo both with the same guarantee?
-3. In bulk updates, ask whether all documents and all external systems transition together or whether partial history leaks out.
+3. In bulk updates, map document transaction boundaries separately from webhook/search/index side effects. Which boundary is actually shared?
 
 ## Expert Debrief
 

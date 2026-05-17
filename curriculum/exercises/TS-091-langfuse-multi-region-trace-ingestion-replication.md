@@ -3109,9 +3109,9 @@ Expected answer:
 
 Hints:
 
-1. Look at what happens after `getRegionAwareTrace` finds more than one region for the same trace.
+1. Follow a read when replicas disagree about where the trace lives. Which response contract should a client be able to trust?
 2. Find the behavior when `requireConsistentRead` is true and the data is mixed.
-3. A normal `200` trace response with `consistency: "mixed"` is not the same as a coherent product read model.
+3. Compare the trace read contract with the consistency metadata added by the PR. Is metadata enough if the payload combines multiple sources?
 
 ## Final Expert Debrief
 

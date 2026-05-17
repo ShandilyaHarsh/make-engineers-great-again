@@ -2146,7 +2146,7 @@ Hints:
 
 1. Follow the state transition from "cart not completed" to "order exists" rather than starting with the route.
 2. Ask which row or lock makes two concurrent requests serialize on the same cart.
-3. The migration creates indexes, but no unique constraint; the workflow reads before writing under no cart lock.
+3. Compare the indexes introduced by the migration with the write path in the workflow. Which statement makes concurrent submissions serialize on one cart?
 
 ### Flaw 2: Inventory Reservation Happens After The Order Is Already Committed
 

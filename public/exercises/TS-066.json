@@ -14043,7 +14043,7 @@
       "hints": [
         "Follow the state transition from \"cart not completed\" to \"order exists\" rather than starting with the route.",
         "Ask which row or lock makes two concurrent requests serialize on the same cart.",
-        "The migration creates indexes, but no unique constraint; the workflow reads before writing under no cart lock."
+        "Compare the indexes introduced by the migration with the write path in the workflow. Which statement makes concurrent submissions serialize on one cart?"
       ]
     },
     {

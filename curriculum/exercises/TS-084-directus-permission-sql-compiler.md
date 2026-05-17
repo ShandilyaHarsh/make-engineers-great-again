@@ -2771,7 +2771,7 @@ index 0000000000..084bad0008
 ## Intended Flaw 1: Permission Logic Is Duplicated Between SQL Compiler And Existing App Filters
 
 ### Hint 1
-Trace one permission rule through the old path and the new path. Are they using the same semantic representation or two different interpreters?
+Trace one permission rule through the old path and the PR path. Where is the meaning of that rule decided in each path?
 
 ### Hint 2
 If SQL and app-level filtering both interpret permissions, every policy feature now has to be implemented twice perfectly.
@@ -2791,7 +2791,7 @@ Use one semantic source of truth. Extend the existing permission AST/case system
 ## Intended Flaw 2: Unsupported Rules Fail Open
 
 ### Hint 1
-Find what happens when the compiler sees an unsupported operator or no permissions for a collection.
+Pick a permission operator from the docs that is awkward to lower to SQL. What result shape does the compiler return for that branch?
 
 ### Hint 2
 Logging an unsupported permission rule is not an enforcement strategy.

@@ -22888,7 +22888,7 @@
       "hints": [
         "Look at the new package API. Can a Nest service, worker, CLI, or unit test call it without constructing a Next request and response?",
         "A reusable package should usually accept an explicit actor/context object. Importing next, next-auth, and web auth options turns a domain package into a web runtime package.",
-        "When API v2 and jobs start building synthetic Next requests, the abstraction has already leaked."
+        "Search for places where non-Next callers construct request-shaped objects. What does that say about the package boundary?"
       ]
     },
     {

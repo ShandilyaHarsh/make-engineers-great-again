@@ -2446,7 +2446,7 @@ Hints:
 
 1. Count how many repository calls happen after `candidateTraces` comes back.
 2. Ask what happens when a project has 100 traces on a page and each trace has many observations and scores.
-3. Compare this with a set-based table query that aggregates scores/observations by `trace_id` once and joins the result to the trace page.
+3. Ask whether enrichment is a per-trace operation or a page-level query contract.
 
 ### Flaw 2: Access filtering is applied after fetch, enrichment, pagination cursor selection, and response counts
 

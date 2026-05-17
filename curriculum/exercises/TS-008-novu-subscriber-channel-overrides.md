@@ -690,7 +690,7 @@ Hints:
 
 1. Compare the new merge order with the existing `MergePreferences` contract in `libs/application-generic/src/usecases/merge-preferences/merge-preferences.usecase.ts`.
 2. Follow one channel where global says `false` and workflow-specific subscriber preference says `true`.
-3. The bug is the new override preference being appended at the end of `preferencesList`.
+3. Inspect how `preferencesList` is ordered before `MergePreferences`. Which source wins if the same channel appears twice?
 
 ### Flaw 2: Preference Updates Expose Versions But Do Not Use Optimistic Concurrency
 
@@ -708,7 +708,7 @@ Hints:
 
 1. A response `version` is only useful if the next write proves which version it edited.
 2. Look at the update filter, not only the response DTO.
-3. The missing test is two clients reading the same version and saving different channel changes.
+3. Model two browser tabs saving different channel changes from the same starting state. What should the stored preference preserve?
 
 ## Final Expert Debrief
 

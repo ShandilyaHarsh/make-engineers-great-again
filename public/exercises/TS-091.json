@@ -20511,9 +20511,9 @@
       "expectedFix": "",
       "goldenAnswer": "- `identify`: The read model queries multiple regions, chooses a local trace row if available, then merges observations and scores from all found regions by ID. If a strong read is requested and the result is mixed, it only logs a warning and still returns mixed data. The public API exposes `consistency: \"mixed\"` but still returns a normal trace response with local trace fields, possibly replicated observations, and scores from another region. There is no documented read-your-write, home-region, bounded-staleness, or replica-watermark contract.\n- `impact`: Users can see impossible traces: trace metadata from EU, observations from US replication, scores from AP, and latency/cost computed over a mix that never existed in any region. A support engineer may debug a trace that changes shape between reads. Strong-consistency callers get a successful response that violates the requested consistency. Dashboards, evals, exports, and deletion flows can make product decisions from partial data.\n- `fix_direction`: Choose and document a read model. For example, route trace reads to the trace's authoritative home region, or serve local reads only up to a replica watermark, or return an explicit pending/lagged status when consistency cannot be satisfied. If merging replicas is required, merge by the same global sequence contract from flaw 1 and expose bounded staleness. Strong consistency should block, redirect, or fail explicitly rather than returning mixed data.",
       "hints": [
-        "Look at what happens after getRegionAwareTrace finds more than one region for the same trace.",
+        "Follow a read when replicas disagree about where the trace lives. Which response contract should a client be able to trust?",
         "Find the behavior when requireConsistentRead is true and the data is mixed.",
-        "A normal 200 trace response with consistency: \"mixed\" is not the same as a coherent product read model."
+        "Compare the trace read contract with the consistency metadata added by the PR. Is metadata enough if the payload combines multiple sources?"
       ]
     }
   ],

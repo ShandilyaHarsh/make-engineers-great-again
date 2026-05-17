@@ -754,7 +754,7 @@ Hints:
 
 1. Look at database indexes, not only the operation code.
 2. Ask whether a deleted document should still reserve its slug forever.
-3. The missing test is: delete `slug=a`, create another `slug=a`, then restore the first document.
+3. Try the lifecycle where a unique value is reused while the original document is hidden, then the original document returns. What invariant has to hold?
 
 ## Final Expert Debrief
 

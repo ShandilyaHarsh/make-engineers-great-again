@@ -1402,7 +1402,7 @@ Hints:
 
 1. Look at how `parseFilter` treats multiple entries in a normal filter object.
 2. Now find the default combinator in the new nested saved-filter parser.
-3. Take a two-clause tenant filter and ask whether more or fewer rows are returned after migration.
+3. Run a two-clause saved filter through the migration and compare the predicate shape before and after.
 
 ### Flaw 2: Unknown filter operators are silently dropped
 

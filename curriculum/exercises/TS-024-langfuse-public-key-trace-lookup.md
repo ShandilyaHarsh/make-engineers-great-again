@@ -1115,7 +1115,7 @@ Hints:
 
 1. The route change changes the risk level of the Bearer key lookup.
 2. Look at what `findDbKeyOrThrow` checks after fetching `project` and `organization`.
-3. It checks that `projectId` exists, but not that the project, key, and org are still active for a read.
+3. After route-level project lookup, follow the read through organization and key lifecycle checks. Which active-state facts still have to be true?
 
 ## Final Expert Debrief
 

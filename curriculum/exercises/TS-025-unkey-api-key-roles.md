@@ -1358,7 +1358,7 @@ Expected answer:
 
 Hints:
 
-1. Start from the tenant boundary. The key is scoped; check whether the role and permission paths carry that same scope all the way through.
+1. Start at the role-assignment operation. Which ids in the request belong to workspace-owned RBAC state, and where should that ownership be proven?
 2. Compare the PR to Unkey's existing pattern: `web/apps/dashboard/lib/trpc/routers/key/rbac/update-rbac.ts` validates key, roles, and permissions against `ctx.workspace.id` before writing join rows.
 3. In `update-key-roles.ts`, the role query uses only `inArray(table.id, uniqueRoleIds)`. In `resolve-effective-permissions.ts`, the role expansion query filters by role ID but not by workspace.
 

@@ -1229,7 +1229,7 @@ Expected answer:
 Hints:
 
 1. The store query-config warning is a clue: copied admin fields are dangerous on customer-facing APIs.
-2. Search for any field or filter that says whether a note is internal or customer-visible. There is none.
+2. Search for how the route distinguishes staff-only notes from customer-visible notes before deciding what can be overridden.
 3. The failing mental model is "admin-created note" vs "customer-visible note." Those are separate dimensions.
 
 ## Expert Debrief

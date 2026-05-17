@@ -3820,7 +3820,7 @@ Custom role slugs are human-defined identifiers. Ask whether the same slug in tw
 
 ### Hint 2
 
-Look at the fallback behavior when a custom role slug is missing in the target project. Does it fail closed or create access anyway?
+Follow target-role mapping when a source role has no match. What authority should a clone operation invent versus require?
 
 ### Hint 3
 

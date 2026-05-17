@@ -1116,7 +1116,7 @@ Hints:
 
 1. Compare the new service to the existing v2 slots endpoint path: `apps/api/v2/src/modules/slots/slots-2024-09-04/services/slots.service.ts` delegates to `getAvailableSlotsService().getAvailableSlots` in `packages/trpc/server/routers/viewer/slots/util.ts`.
 2. Ask whether "schedule availability minus accepted bookings" is the full Cal.diy availability contract.
-3. The dangerous code is the loop that reads `host.schedule?.availability ?? eventType.availability` instead of delegating to `AvailableSlotsService`.
+3. In the bulk preview service, find the loop that constructs candidate windows from host/event schedules. Which capabilities from `AvailableSlotsService` are absent from that path?
 
 ### Flaw 2: Debug Busy Details Leak Private Booking Data
 

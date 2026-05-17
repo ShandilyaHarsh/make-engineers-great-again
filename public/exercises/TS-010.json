@@ -6146,7 +6146,7 @@
       "hints": [
         "Type names and runtime guarantees are separate contracts.",
         "Follow what happens after the second item throws in the server loop.",
-        "The test that says partial results happen in atomic mode is locking in the bug."
+        "Compare the atomic mode test expectation with what that word promises to a caller receiving mixed outcomes."
       ]
     },
     {

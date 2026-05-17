@@ -4281,7 +4281,7 @@ The PR moves access evaluation from Payload's shared semantic `Where` pipeline i
 
 ### Hint 1
 
-Trace the same access `Where` through MongoDB, Postgres, and SQLite. Do the operators mean the same thing in all three implementations?
+Run one access rule with arrays/relationships through MongoDB, Postgres, and SQLite code. Which layer owns the meaning of the rule?
 
 ### Hint 2
 

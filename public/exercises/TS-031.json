@@ -9902,8 +9902,8 @@
       "goldenAnswer": "The PR adds a valuable batch trace update endpoint, but it ships two serious design flaws. First, the partial-success response is not actionable: `failedTraceIds` gives clients no item-level reason, status, request index, or retryability, so enrichment jobs cannot safely reconcile or retry failures. Second, the implementation mutates traces as it walks the batch and can later throw `403` for a foreign-project trace, leaving earlier updates committed even though the request failed. The fix is to make the batch semantics explicit: prevalidate all items and project ownership before writes for atomic behavior, or return stable item-level results for partial behavior and never mix fatal batch errors with already-committed prefix writes.",
       "hints": [
         "Follow the for (const item of updates) loop and mark the first line where a write can happen.",
-        "Now find the line where a later trace can throw ForbiddenError.",
-        "A server returns 403, but one trace has changed. What promise did the API just fail to keep?"
+        "Follow the loop after at least one trace mutation succeeds. What happens if authorization fails on a later item?",
+        "Compare the HTTP status contract with the per-item mutation timeline. Can the caller know which changes are durable?"
       ]
     }
   ],

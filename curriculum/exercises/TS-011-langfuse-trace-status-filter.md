@@ -842,7 +842,7 @@ Hints:
 
 1. Follow the column from the migration into the TypeScript schema and then into the default trace table filters.
 2. SQL `IN (...)` does not match `NULL`.
-3. The tests create only new-style rows. They never prove compatibility with old traces.
+3. Use a pre-change trace row as your mental fixture. What should the status filter do before any new ingestion has touched it?
 
 ### Flaw 2: The Backfill Runs As A Blocking Schema Migration
 
@@ -859,8 +859,8 @@ Expected answer:
 Hints:
 
 1. Compare this migration to the existing trace Postgres-to-ClickHouse background migration pattern in `packages/shared/prisma/migrations/20241024173000_add_traces_pg_to_ch_background_migration/migration.sql` and `worker/src/backgroundMigrations/migrateTracesFromPostgresToClickhouse.ts`.
-2. Look for full-table `UPDATE` or synchronous ClickHouse mutation work in the migration files.
-3. A schema migration should not be responsible for rewriting the whole traces corpus.
+2. Inspect what the migration does at deploy time versus what the background migration framework normally schedules.
+3. Ask what work a schema migration should be allowed to do synchronously when the ClickHouse traces table is already large.
 
 ## Final Expert Debrief
 

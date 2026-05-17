@@ -16214,7 +16214,7 @@
       "goldenAnswer": "- Primary lines: `packages/modules/inventory/src/services/availability-cache.ts:9-21`\n- Supporting lines: `packages/modules/inventory/src/services/inventory-module.ts:12-16` and `docs/bulk-inventory-availability.md:15-15`\n- Issue: checkout availability can come from a 60-second cache that is not invalidated by reservation changes. Availability is based on reserved quantity, so stale reads can approve stock that has already been reserved.\n- Impact: concurrent carts or B2B quote checks can oversell inventory, produce failed fulfillment later, or create inconsistent reservations. The risk is highest for scarce stock and popular SKUs.\n- Better direction: do not use a stale cache for checkout confirmation. Read current inventory/reservation state in the transaction or use a reservation-aware read model with invalidation/versioning. Cache only non-authoritative browsing hints, and label them separately from checkout guarantees.",
       "hints": [
         "Look at the cache key and expiration. What data changes should invalidate it?",
-        "Trace the cart confirmation step into confirmBulkInventory and its cache settings.",
+        "Trace cart confirmation into confirmBulkInventory and ask whether cached availability is still a fact at order-placement time.",
         "Ask whether checkout availability should be a best-effort cached read or a current reservation-aware read."
       ]
     }

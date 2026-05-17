@@ -2321,7 +2321,7 @@ The PR loads policies/permissions, replaces dynamic variables, merges permission
 Hints:
 
 1. Trace `ItemsService.readByQuery`: how many permission-processing paths run before the query executes?
-2. Search for `$CURRENT_USER` or permission-row merging outside the existing permission utilities: `api/src/permissions/modules/process-ast/process-ast.ts` and `api/src/permissions/modules/process-ast/lib/get-cases.ts`.
+2. Trace where permission data is loaded before `runAst`, then compare that handoff with `api/src/permissions/modules/process-ast/process-ast.ts` and `api/src/permissions/modules/process-ast/lib/get-cases.ts`.
 3. Ask what happens when Directus changes dynamic variable semantics, share permissions, app minimal permissions, or field-case behavior in only one path.
 
 ## Expected Answer

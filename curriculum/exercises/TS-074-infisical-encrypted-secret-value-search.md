@@ -2474,7 +2474,7 @@ The mapper returns `valueSnippet`, `commentSnippet`, `matchedPlaintext`, and `ma
 Hints:
 
 1. Look at `toSecretSearchResult`, the route response schema, and the audit event together.
-2. Ask whether a search page, API gateway log, support replay, analytics pipeline, or audit table should ever receive plaintext secret values.
+2. List every system that receives a search result payload or audit row. Which of those systems should ever see material derived from decrypted values?
 3. Design the feature so search reveals safe metadata first and requires the existing read-value path: `conditionallyHideSecretValue` in `backend/src/services/secret/secret-fns.ts` plus permission checks in `backend/src/services/secret/secret-service.ts`.
 
 ## Expected Answer

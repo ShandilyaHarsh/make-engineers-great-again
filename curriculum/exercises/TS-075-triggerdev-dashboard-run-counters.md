@@ -2430,7 +2430,7 @@ The project and environment breakdowns query by organization only, without `dele
 
 Hints:
 
-1. Trace the route params into `DashboardRunCounterRequest`; check whether `project.id` and `environment.id` make it into the counter service.
+1. Follow route params into `DashboardRunCounterRequest` and compare them with the lifecycle filters the metrics path normally carries.
 2. Look for lifecycle filters on `Project.deletedAt` and `RuntimeEnvironment.archivedAt`.
 3. Ask what a user expects on a project environment dashboard: active current-scope counters or historical organization totals including removed resources?
 

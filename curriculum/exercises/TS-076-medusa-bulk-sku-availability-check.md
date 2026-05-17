@@ -2432,7 +2432,7 @@ The feature caches available/reserved/stocked quantities for 60 seconds by item 
 Hints:
 
 1. Look at the cache key and expiration. What data changes should invalidate it?
-2. Trace the cart confirmation step into `confirmBulkInventory` and its cache settings.
+2. Trace cart confirmation into `confirmBulkInventory` and ask whether cached availability is still a fact at order-placement time.
 3. Ask whether checkout availability should be a best-effort cached read or a current reservation-aware read.
 
 ## Expected Answer

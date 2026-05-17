@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "generate:exercises": "node scripts/extract-exercises.mjs"
+    "generate:exercises": "node scripts/extract-exercises.mjs",
+    "audit:curriculum": "node scripts/audit-curriculum-quality.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",

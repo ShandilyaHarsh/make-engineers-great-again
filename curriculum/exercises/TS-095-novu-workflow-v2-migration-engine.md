@@ -4165,7 +4165,7 @@ The replay use case reads old notifications and calls the live Workflow V2 trigg
 
 ### Hint 1
 
-Trace replay from old notification to new job creation. Is it rebuilding analytics, or executing provider side effects?
+Trace replay from old notification to new job creation. Mark which steps are read-model writes and which steps can reach providers.
 
 ### Hint 2
 

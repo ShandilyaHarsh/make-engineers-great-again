@@ -7864,7 +7864,7 @@
       "hints": [
         "Compare the new unique index to counterKey in the existing limiter at internal/services/ratelimit/keys.go.",
         "In this codebase, Namespace is not globally unique.",
-        "The test named NamespaceReuseAcrossWorkspaces is actually blessing the bug."
+        "Read NamespaceReuseAcrossWorkspaces as a product scenario. What should two workspaces sharing a namespace string prove about the key shape?"
       ]
     },
     {

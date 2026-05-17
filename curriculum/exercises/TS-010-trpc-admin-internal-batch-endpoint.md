@@ -976,7 +976,7 @@ Hints:
 
 1. Type names and runtime guarantees are separate contracts.
 2. Follow what happens after the second item throws in the server loop.
-3. The test that says partial results happen in `atomic` mode is locking in the bug.
+3. Compare the `atomic` mode test expectation with what that word promises to a caller receiving mixed outcomes.
 
 ### Flaw 2: Mixed Query/Mutation Batching Breaks Retry And Side-Effect Semantics
 
