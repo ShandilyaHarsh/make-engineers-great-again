@@ -2824,7 +2824,7 @@ The PR changes three contracts:
 Important failure modes include SQL/app evaluator drift, row-level permission leaks for unsupported filters, field masking mismatches, pagination/count differences, relation rules ignored by SQL, and operators behaving differently from the established AST path.
 
 ### Reviewer Thought Process
-A strong reviewer should ask whether a security optimization preserves one semantic source of truth. Then they should inspect fallback behavior. In this PR, the answer to both is bad: there are two interpreters, and unsupported rules skip enforcement.
+A strong reviewer asks whether a security optimization preserves one semantic source of truth, then follows an unsupported permission rule through compiler, fallback, and read path. That route matters because authorization performance work is only safe when the old evaluator and the new lowerer are two representations of the same policy, and incomplete compilation still flows through a known enforcement path.
 
 ### What Good Looks Like
 A better implementation would compile from the existing permission AST or shared IR, prove equivalence with the old evaluator, and fail closed when compilation is incomplete. Rollout should include shadow comparison metrics before using SQL predicates as the enforcement path.

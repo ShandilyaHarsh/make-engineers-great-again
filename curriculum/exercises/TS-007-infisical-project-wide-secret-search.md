@@ -845,7 +845,7 @@ The PR is trying to make secret discovery easier in large projects by letting a 
 
 ### Reviewer thought process
 
-A strong reviewer should first ask: "What is the smallest permission that currently allows a secret value to be read?" In Infisical, that is not project read. Existing code checks secret permissions with `{ environment, secretPath }`. Any PR that searches across environments has to preserve that same subject model or it becomes a privilege escalation.
+A strong reviewer starts with the operation the product is enabling: search turns many secret rows into candidates before a human chooses one. That is very different from reading a known secret. The natural review path is to ask which existing permission dimensions narrow a normal secret read, then verify the search pipeline applies those same dimensions before decrypting, matching, returning, or logging anything.
 
 The second question is: "Where does plaintext exist after decryption?" In secret-management systems, plaintext should have the smallest possible lifetime and audience. The logger call is a bigger problem than missing polish because logs are often copied, indexed, retained, and accessed by more people than the production database.
 

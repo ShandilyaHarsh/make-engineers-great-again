@@ -976,9 +976,9 @@ The PR is trying to make eval workflows faster: instead of calling `POST /datase
 
 ### Reviewer thought process
 
-A strong reviewer should first ask: "This PR turns trace ids into dataset run items. Which system owns traces, which system owns datasets, and what proves they are in the same project?" That points directly to the trace lookup helper. The helper's missing `projectId` parameter is more important than any local style issue because the product feature is crossing a security-sensitive domain boundary.
+A strong reviewer would start from the product transformation, not from `projectId`: this endpoint takes identifiers from one domain (`traces`) and uses them to create records in another domain (`datasets`). That is the moment to draw the boundary map. The reviewer should ask what the caller already owns at the API edge, which objects are only named by client input, and which existing helper normally turns that name into an authorized domain object. Following that path leads from the route, to dataset lookup, to the new trace candidate lookup, and only then to the missing project-scoped predicate.
 
-The second question is: "Which timestamps are product facts and which are operational facts?" Trace timestamp is when the original LLM call happened. Dataset run item creation time is when the run was assembled. Internal event timestamp is when the system accepted a mutation. Those three can be related, but they are not interchangeable. The degraded PR collapses them into one caller-controlled value.
+The timestamp issue follows the same route. The PR accepts historical trace data, creates new dataset-run state, and emits an internal ingestion event. Those are three different facts: when the original trace happened, when the dataset run item was assembled, and when the system accepted the mutation. A strong reviewer does not begin by saying "`createdAt` is wrong"; they first ask which downstream systems sort, retain, retry, or audit by each timestamp. That makes it clear why a source timestamp can be stored as source metadata but should not become the operational event time.
 
 ### Better implementation direction
 

@@ -34,6 +34,17 @@ const shallowFlawTitlePatterns = [
   /\bunused variable\b/i,
 ];
 
+const directThoughtProcessPatterns = [
+  /\bIn this PR\b/i,
+  /\bThis PR fails\b/i,
+  /\bthe degraded PR\b/i,
+  /\bpoints directly\b/i,
+  /\bthe helper's missing\b/i,
+  /\bboth answers are (?:bad|uncomfortable)\b/i,
+  /\bthe answer to both is bad\b/i,
+  /\bHere,?\s+(?:it does not|there is no)\b/i,
+];
+
 function section(markdown, heading) {
   const start = markdown.indexOf(`## ${heading}`);
   if (start === -1) return "";
@@ -97,6 +108,27 @@ function extractHints(body) {
     }));
 }
 
+function reviewerThoughtProcessSections(markdown) {
+  const sections = [];
+  const headingMatches = [...markdown.matchAll(/^### Reviewer [Tt]hought [Pp]rocess\s*\n([\s\S]*?)(?=\n### |\n## |\n?$)/gm)];
+
+  for (const match of headingMatches) {
+    sections.push(normalize(match[1]));
+  }
+
+  const inlineMatches = [
+    ...markdown.matchAll(
+      /(?:^|\n)Reviewer thought process:\s*([\s\S]*?)(?=\n\n(?:Better implementation direction|## Correctness|###|##)|\n## |\n?$)/gi,
+    ),
+  ];
+
+  for (const match of inlineMatches) {
+    sections.push(normalize(match[1]));
+  }
+
+  return sections;
+}
+
 function normalize(value) {
   return value.trim().replace(/\s+/g, " ");
 }
@@ -114,6 +146,12 @@ for (const fileName of files) {
   const markdown = await readFile(path.join(SOURCE_DIR, fileName), "utf8");
   const flaws = flawSections(markdown);
   flawCount += flaws.length;
+
+  for (const thoughtProcess of reviewerThoughtProcessSections(markdown)) {
+    if (matchesAny(thoughtProcess, directThoughtProcessPatterns)) {
+      findings.push(`${fileName}: answer-forward reviewer thought process: ${thoughtProcess}`);
+    }
+  }
 
   for (const flaw of flaws) {
     if (matchesAny(flaw.title, shallowFlawTitlePatterns)) {

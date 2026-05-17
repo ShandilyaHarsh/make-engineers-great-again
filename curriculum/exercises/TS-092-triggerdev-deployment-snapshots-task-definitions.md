@@ -3673,7 +3673,7 @@ The PR changes three contracts:
 Important failure modes include retries executing new code, changed retry settings mid-run, queue or machine selection changing between attempts, checkpoint restore targeting missing metadata, old snapshots being deleted while delayed runs still need them, and debugging showing a version string that no longer describes what actually executed.
 
 ### Reviewer Thought Process
-A strong reviewer should ask two questions for any versioning PR: what is the immutable binding, and what keeps the bound artifact alive? Here, there is no immutable run-to-snapshot key and no lifecycle-aware retention. The table exists, but the system still behaves like latest lookup plus time-based cleanup.
+A strong reviewer asks two questions for any versioning PR: what is the immutable binding, and what keeps the bound artifact alive? They ask because retries, checkpoints, delayed runs, and debugging all happen after deployment state has moved on. The review path is to pick one run, follow the version identifier through enqueue, attempts, context resolution, and cleanup, and make sure no step falls back to "latest" by convenience.
 
 ### What Good Looks Like
 A better implementation would bind every run to a snapshot at the moment the run becomes executable, carry that ID through queue messages, attempts, retries, checkpoints, replays, and context resolution, and prune snapshots only after all run lifecycle references have expired or completed. Tests should prove a retry after a newer deployment still uses the original snapshot.

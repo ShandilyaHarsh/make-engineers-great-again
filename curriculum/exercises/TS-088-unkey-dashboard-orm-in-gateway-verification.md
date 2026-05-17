@@ -3332,7 +3332,7 @@ The PR changes three contracts:
 Important failure modes include primary database latency causing verification latency spikes, dashboard migrations breaking gateway deploys, regional gateways failing because they cannot reach dashboard MySQL, leaked gateway credentials granting dashboard/control-plane access, and verification logic accidentally depending on dashboard-only fields that are not replicated or stable.
 
 ### Reviewer Thought Process
-A strong reviewer should resist the surface-level appeal of removing duplication. The first question is ownership: is this a control-plane concern or a data-plane contract? The second question is runtime shape: what must be up for a customer request to succeed? The third question is blast radius: what new secrets and privileges are present in the hot path? This PR fails all three checks.
+A strong reviewer resists the surface-level appeal of removing duplication. The first question is ownership: is this a control-plane concern or a data-plane contract? The second question is runtime shape: what must be up for a customer request to succeed? The third question is blast radius: what new secrets and privileges are present in the hot path? That sequence keeps the reviewer focused on the customer request path instead of the convenience of sharing dashboard query code.
 
 ### What Good Looks Like
 A better implementation would define a small gateway verification projection, update it from the control plane through a durable replication or invalidation path, read it through gateway-owned caches or read-only replicas, and keep dashboard UI/database details out of the request path. The dashboard can still share domain types, but the runtime boundary should be explicit and least-privilege.

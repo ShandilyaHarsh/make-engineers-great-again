@@ -3259,7 +3259,7 @@ The PR changes three contracts:
 Important failure modes include cross-adapter authorization drift, tenant leaks on SQLite fallback, relationship access mismatch between Mongo and Postgres, plugin configs becoming adapter-specific, and future adapter query-builder changes breaking application-level collection config.
 
 ### Reviewer Thought Process
-A strong reviewer should separate public semantic APIs from private adapter mechanics. Payload collections should express access rules in a database-neutral form. Then the reviewer should ask whether the optimization is semantics-preserving. In this PR, it is not: adapter hints can change the filter or drop it entirely.
+A strong reviewer separates public semantic APIs from private adapter mechanics. Payload collection config should describe access rules in terms every adapter can preserve. The next move is to follow one optimized rule through each adapter and ask whether the optimization only changes planning cost, or whether it can change the authorized document set.
 
 ### What Good Looks Like
 A better implementation would keep access rules as portable `Where` constraints, let adapters plan equivalent queries internally, expose only stable capability contracts if needed, and require cross-adapter equivalence tests for every optimized access predicate.

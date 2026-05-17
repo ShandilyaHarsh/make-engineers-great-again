@@ -2824,7 +2824,7 @@ The PR changes three contracts:
 Important failure modes include massive relation aggregation before filtering, parent pages that do not contain matching relation rows, memory pressure from hydrated child rows, generated SQL that cannot be inspected to explain the predicate, and application code crashing after trusting the narrowed type.
 
 ### Reviewer Thought Process
-A strong reviewer should trace a predicate from API surface to type inference to SQL builder to row mapper to runtime result. The key question is: "At which layer does this predicate change the data set?" In this PR it changes only already-hydrated JavaScript objects, while the type system describes a stronger database-level guarantee.
+A strong reviewer traces a predicate from API surface to type inference to SQL builder to row mapper to runtime result. At each hop, they ask what guarantee actually became stronger: the TypeScript type, the returned rows, the generated SQL, or only the already-hydrated objects. The mental model is to compare what the API name implies with what the database is forced to do; pagination, generated SQL, and runtime result shape should all tell the same story.
 
 ### What Good Looks Like
 A better implementation would add a relation predicate AST that can be lowered by each dialect, include tests over generated SQL and returned rows, and make parent-versus-child filtering explicit in the API. If Drizzle wants a client-side helper too, it should be named and typed as post-processing rather than a query predicate.

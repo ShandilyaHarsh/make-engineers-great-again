@@ -3309,7 +3309,7 @@ The PR changes three contracts:
 Important failure modes include certificates renewed without policy validation, private keys exported under ordinary read permissions, secret path/environment semantics ignored by generic storage, audit trails losing domain-specific masking, sync/revocation workflows not firing, and typo-based permission drift.
 
 ### Reviewer Thought Process
-A strong reviewer should ask what invariants make each domain different before evaluating the abstraction. If the shared layer owns lifecycle or permission decisions, it must encode every domain invariant. Here it does not. It flattens the domains first and hopes compatibility layers will recover the lost meaning later.
+A strong reviewer asks what invariants make each domain different before evaluating the abstraction. The useful path is not "can two resources share encrypted blobs?" but "who owns creation, renewal or rotation, masking, permission verbs, audit events, and revocation for each resource?" If a shared layer touches those decisions, the reviewer should demand evidence that every domain invariant survived the flattening, not just that adapters can map names back afterward.
 
 ### What Good Looks Like
 A better design would keep secret and certificate services as the writers and lifecycle authorities, then share small primitives or build a generic read projection for search/navigation. Permission checks would remain typed, explicit, and fail-closed, with separate tests for secret value read, certificate read, private-key read, certificate import, renewal, revocation, and sync.

@@ -2932,7 +2932,7 @@ The PR changes three contracts:
 Important failure modes include provider-specific regressions in the core worker, new providers requiring workflow engine changes, replay mismatch after integration changes, skipped delay or digest semantics, duplicate or missing sends due to changed idempotency keys, and status dashboards showing provider-normalized states that do not match the canonical workflow lifecycle.
 
 ### Reviewer Thought Process
-A strong reviewer should separate delivery adaptation from workflow semantics. First ask: does this code keep provider quirks at the adapter boundary? Then ask: can I replay the same run later and get the same step graph? In this PR, both answers are bad: provider names leak into the engine, and the graph changes after provider lookup.
+A strong reviewer separates delivery adaptation from workflow semantics by tracing where provider knowledge first enters the worker. Provider adapters can know about quirks; the workflow engine should know about authored steps, snapshots, idempotency, and replay. The reviewer then asks whether the same stored run would produce the same graph after provider settings or integration code change.
 
 ### What Good Looks Like
 A better implementation would keep workflows as immutable, channel-level step graphs. Provider adapters would expose typed capabilities and delivery outcomes, but the executor would not reorder, remove, or split workflow steps based on mutable provider state. Any provider-influenced execution choice would be captured in a versioned run snapshot and shown in debug tools.
