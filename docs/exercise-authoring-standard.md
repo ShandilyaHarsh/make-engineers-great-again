@@ -40,6 +40,8 @@ Hints are per flaw and do not reduce score. They should move from judgment area 
 2. Hint 2: which contract or subsystem to inspect.
 3. Hint 3: the precise code path or invariant that should make the issue visible.
 
+Every hint must be answerable from material visible in the exercise. If a hint asks the learner to compare against an existing helper, table, route, queue contract, permission boundary, or migration pattern, the relevant signature or contract snippet must appear in `Existing Code Context` or the shown diff. Do not reference repo knowledge that is only implied by the author.
+
 ## Flaw Taxonomy
 
 - `contract_mismatch`: the code changes behavior without updating the public/internal contract.

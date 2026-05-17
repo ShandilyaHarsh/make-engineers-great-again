@@ -35,6 +35,33 @@ The real Langfuse codebase already has the following relevant contracts:
 - `packages/shared/src/server/repositories/traces.ts` exposes `getTraceById({ traceId, projectId, ... })`, so trace lookup is expected to be project-scoped.
 - `packages/shared/src/server/ingestion/types.ts` treats dataset run item creation as internal ingestion only.
 
+Relevant existing helper signatures visible for this review:
+
+```ts
+// web/src/pages/api/public/dataset-run-items.ts
+const observation = body.observationId
+  ? await getObservationById({
+      id: body.observationId,
+      projectId: auth.scope.projectId,
+    })
+  : undefined;
+```
+
+```ts
+// packages/shared/src/server/repositories/traces.ts
+export const getTraceById = async ({
+  traceId,
+  projectId,
+  timestamp,
+}: {
+  traceId: string;
+  projectId: string;
+  timestamp?: Date;
+}) => {
+  return await queryTrace({ traceId, projectId, timestamp });
+};
+```
+
 ## Learner Task
 
 Review the PR. Identify the two intended flaws. For each flaw:
