@@ -30,7 +30,7 @@ The PR adds:
 
 The real Payload codebase already has these relevant contracts:
 
-- `packages/payload/src/collections/operations/delete.ts` and `deleteByID.ts` run `buildBeforeOperation`, delete access, lock checks, collection `beforeDelete` hooks, associated-file/version/scheduled-publish cleanup, database delete, `afterRead`, collection `afterRead`, collection `afterDelete`, and `buildAfterOperation`.
+- `packages/payload/src/collections/operations/delete.ts` and `deleteByID.ts` run `buildBeforeOperation`, `executeAccess` for delete access, lock checks, collection `beforeDelete` hooks, associated-file/version/scheduled-publish cleanup, database delete, `afterRead`, collection `afterRead`, collection `afterDelete`, and `buildAfterOperation`.
 - `packages/payload/src/collections/operations/local/delete.ts` creates a local request and routes local API deletes through the same delete operations as REST.
 - `packages/payload/src/collections/endpoints/delete.ts` and `deleteByID.ts` parse query params, including `trash`, then call the central delete operations.
 - `packages/payload/src/utilities/appendNonTrashedFilter.ts` appends a `deletedAt exists false` filter when trash is enabled and a caller has not opted into trashed documents.

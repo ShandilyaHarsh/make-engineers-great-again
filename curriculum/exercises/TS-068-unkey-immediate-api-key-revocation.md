@@ -2218,7 +2218,7 @@ The revoke path marks the key revoked and publishes dashboard/control-plane chan
 ### Flaw 1 Hints
 
 1. Start with the product promise: what does "immediate revocation" require from the verification path, not just the dashboard database row?
-2. Compare the identifier used in `publishRevocation` with the identifier used in `GatewayVerificationCache.get`.
+2. Compare the identifier used in `publishRevocation` with the identifier used by `GatewayVerificationCache` when it reads from its get-by-hash cache path.
 3. Look at `revoke-key.ts` where the revocation record includes `keyHash`, then at `cache.ts` where only `keyId` channels are published.
 
 ### Flaw 2: Revocation is not an idempotent terminal transition

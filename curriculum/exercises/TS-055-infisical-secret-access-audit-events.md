@@ -33,7 +33,7 @@ The intended product behavior is: secret-access auditing should become more prec
 The real Infisical codebase already has these relevant contracts:
 
 - `backend/src/ee/services/audit-log/audit-log-types.ts` defines `EventType.GET_SECRET = "get-secret"` and `EventType.GET_SECRETS = "get-secrets"` as existing audit event names.
-- `backend/src/ee/services/audit-log/audit-log-types.ts` has typed metadata for `GetSecretEvent` and `GetSecretsEvent`; existing single-secret metadata includes `environment`, `secretPath`, `secretId`, `secretKey`, `secretVersion`, and optional `secretMetadata`.
+- `backend/src/ee/services/audit-log/audit-log-types.ts` has TypeScript interfaces and typed metadata for `GetSecretEvent` and `GetSecretsEvent`; existing single-secret metadata includes `environment`, `secretPath`, `secretId`, `secretKey`, `secretVersion`, and optional `secretMetadata`.
 - `backend/src/ee/services/audit-log/audit-log-types.ts` includes `filterableSecretEvents`, which makes secret audit filters special for `GET_SECRET` and other secret events.
 - `backend/src/ee/services/audit-log/audit-log-service.ts` validates that an audit log has project or org context, attaches permission metadata from request context, and pushes the event to the audit log queue.
 - `backend/src/ee/services/audit-log/audit-log-queue.ts` stores `eventType` and `eventMetadata` in Postgres or ClickHouse-backed audit log paths and can stream logs to external destinations.

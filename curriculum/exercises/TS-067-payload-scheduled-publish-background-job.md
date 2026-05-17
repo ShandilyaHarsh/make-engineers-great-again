@@ -2365,8 +2365,8 @@ The handler publishes by calling `req.payload.update` or `updateGlobal` with `ov
 ### Flaw 1 Hints
 
 1. Find the actual `_status` write in the job handler. What does `overrideAccess` do there?
-2. Look for a fresh `findByID`, doc access check, status check, or trash/lock check immediately before publishing.
-3. Imagine the editor loses publish permission or the document is manually unpublished/resaved before the job runs. What stops the old job?
+2. Look for a fresh `findByID`, doc access check, status check, trash check, or lock check immediately before publishing.
+3. Imagine the editor loses publish permission, or the document is manually unpublished and resaved before the job runs. What stops the old job?
 
 ### Flaw 2: Job identity is only document-scoped, so stale schedules can fire
 

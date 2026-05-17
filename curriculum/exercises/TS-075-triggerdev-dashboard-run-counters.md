@@ -40,7 +40,7 @@ The real Trigger.dev codebase already has these relevant contracts:
 - `apps/webapp/app/services/environmentMetricsRepository.server.ts` reads task activity/running/duration metrics from ClickHouse, scoped by `organizationId`, `projectId`, `environmentId`, time window, and `_is_deleted = 0`.
 - `internal-packages/clickhouse/src/taskRuns.ts` already has task-run query builders and aggregate queries over `trigger_dev.task_runs_v2 FINAL`.
 - `internal-packages/database/prisma/schema.prisma` models `TaskRun` as the operational run table. It has indexes around runtime environment, created time, and status, but the table is also the write path for high-volume run state changes.
-- `Project` has `deletedAt`; `RuntimeEnvironment` has `archivedAt`. Existing auth/environment helpers already care about these lifecycle fields when deciding what should be visible or usable.
+- `Project` has `deletedAt`; `RuntimeEnvironment.archivedAt` is the environment lifecycle field. Existing auth/environment helpers already care about these lifecycle fields when deciding what should be visible or usable.
 
 ## Learner Task
 

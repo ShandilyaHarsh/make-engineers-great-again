@@ -23,7 +23,7 @@ The route returns matching secret keys, environment slugs, secret paths, and opt
 The real Infisical codebase already has these relevant contracts:
 
 - `backend/src/server/routes/v4/secret-router.ts` lists secrets with explicit `projectId`, `environment`, and `secretPath`.
-- `backend/src/services/secret/secret-service.ts` gets project permission with `permissionService.getProjectPermission`.
+- `backend/src/services/secret/secret-service.ts` exposes the existing `getSecretsRaw` path and gets project permission with `permissionService.getProjectPermission`.
 - `backend/src/services/secret/secret-service.ts` checks secret read permission with `throwIfMissingSecretReadValueOrDescribePermission(permission, ReadValue, { environment, secretPath })`.
 - `backend/src/services/secret/secret-service.ts` can hide values based on `hasSecretReadValueOrDescribePermission`.
 - `backend/src/services/secret/secret-dal.ts` reads encrypted secrets by folder id; the service decrypts through project bot keys.

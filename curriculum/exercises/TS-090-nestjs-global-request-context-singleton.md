@@ -41,7 +41,7 @@ The real NestJS framework already has these relevant contracts:
 - Nest docs describe AsyncLocalStorage as a way to propagate state visible only to one request call chain, usually by wrapping the request lifecycle with `AsyncLocalStorage.run`.
 - `ModuleRef.resolve`, `ContextIdFactory.create`, `ContextIdFactory.getByRequest`, and `registerRequestByContextId` are the framework mechanisms for request-scoped DI subtrees and manually registered request objects.
 - Execution context is intentionally transport-aware: HTTP, GraphQL, WebSockets, microservices, and cron-like app code do not share one universal `request.user` shape.
-- Nest core is a general framework. App concepts like current user, tenant ID, organization ID, and roles are normally application-level patterns built with guards, decorators, metadata, and custom providers.
+- Nest core is a general framework. App concepts like current user, tenant ID, organization ID, roles, `@CurrentUser`, and a universal `request.user.roles` SaaS authorization shape are normally application-level patterns built with guards, decorators, metadata, and custom providers.
 
 ## Learner Task
 

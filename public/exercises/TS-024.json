@@ -7028,7 +7028,7 @@
       "hints": [
         "The route change changes the risk level of the Bearer key lookup.",
         "Look at what findDbKeyOrThrow checks after fetching project and organization.",
-        "It checks that projectId exists, but not that the project/key/org is still active for a read."
+        "It checks that projectId exists, but not that the project, key, and org are still active for a read."
       ]
     }
   ],

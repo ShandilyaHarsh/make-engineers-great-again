@@ -35,10 +35,10 @@ The real Directus codebase already has these relevant contracts:
 - `api/src/controllers/items.ts` reads collection items by instantiating `ItemsService` with `req.accountability` and passing `req.sanitizedQuery`.
 - `api/src/utils/sanitize-query.ts` parses `aggregate`, `filter`, `groupBy`, `fields`, `sort`, and `meta` query parameters.
 - `api/src/services/items.ts` implements `readByQuery()` by building an AST, calling `processAst()`, then executing `runAst()`.
-- `api/src/permissions/modules/process-ast/utils/extract-paths-from-query.ts` explicitly extracts fields used by `aggregate` and `group` so permissions can be checked.
+- `api/src/permissions/modules/process-ast/utils/extract-paths-from-query.ts` exports `extractPathsFromQuery()` and explicitly extracts fields used by `aggregate` and `group` so permissions can be checked.
 - `api/src/permissions/modules/process-ast/process-ast.ts` validates field existence, validates field permissions, and injects permission cases before the query runs.
 - `api/src/database/run-ast/lib/apply-query/index.ts` applies permission cases through `joinFilterWithCases()` before aggregating.
-- `api/src/services/meta.ts` implements `filterCount()` by calling `validateAccess()`, fetching permissions, deriving row-permission cases with `getCases()`, and applying those cases before counting.
+- `api/src/services/meta.ts` implements `MetaService.filterCount()` by calling `validateAccess()`, fetching permissions, deriving row-permission cases with `getCases()`, and applying those cases before counting.
 - `api/src/permissions/modules/fetch-allowed-fields/fetch-allowed-fields.ts` is the existing helper for determining field-level read access.
 
 ## Learner Task

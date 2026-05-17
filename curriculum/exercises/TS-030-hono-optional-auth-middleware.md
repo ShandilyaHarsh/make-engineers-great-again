@@ -35,8 +35,8 @@ The new helper adds:
 The real Hono codebase already has these relevant contracts:
 
 - `src/middleware/jwt/jwt.ts` throws `HTTPException(401)` when the Authorization structure is invalid, when no token/cookie is present, and when JWT verification fails. On success it sets `ctx.set("jwtPayload", payload)`.
-- `src/middleware/bearer-auth/index.ts` throws `HTTPException(401)` for missing or invalid tokens and `HTTPException(400)` for malformed Authorization headers. It only calls `await next()` after authentication succeeds.
-- `src/middleware/basic-auth/index.ts` throws `HTTPException(401)` when credentials are missing or invalid, and its tests assert that success callbacks do not run on failed auth.
+- `src/middleware/bearer-auth/index.ts` exports `bearerAuth`, throws `HTTPException(401)` for missing or invalid tokens and `HTTPException(400)` for malformed Authorization headers. It only calls `await next()` after authentication succeeds.
+- `src/middleware/basic-auth/index.ts` exports `basicAuth`, throws `HTTPException(401)` when credentials are missing or invalid, and its tests assert that success callbacks do not run on failed auth.
 - `src/http-exception.ts` documents `HTTPException` as the expected fatal-control-flow mechanism for authentication failures.
 - `src/context.ts` implements `c.set`, `c.get`, and `c.var` using `Env["Variables"]` and `ContextVariableMap`. `c.get` returns `undefined` at runtime if a variable was never set.
 - `src/types.ts` and `src/helper/factory/index.ts` let middleware contribute route-local variable types through generic `MiddlewareHandler` / `createMiddleware` rather than forcing every app route to share one global context shape.

@@ -37,7 +37,7 @@ The real Hono codebase already has these relevant contracts:
 - `src/request.ts` implements `HonoRequest.text()`, `json()`, `arrayBuffer()`, `blob()`, and `formData()` through an internal `bodyCache`. Reading through `c.req` lets later reads reuse cached data.
 - `src/request.ts` exports `cloneRawRequest(c.req)`, which clones the raw `Request` and reconstructs it from Hono's body cache when a Hono request method already consumed the body.
 - `src/request.test.ts` verifies that calling `req.text()`, `req.json()`, and `req.arrayBuffer()` can be mixed because Hono reconstructs derived body forms from the cache.
-- `src/request.test.ts` also verifies that consuming `req.raw.text()` directly leaves `bodyCache` empty and makes cloning impossible.
+- `src/request.test.ts` also verifies that consuming `request.body`, `request.text()`, or `req.raw.text()` directly leaves `bodyCache` empty and makes cloning impossible.
 - `src/validator/validator.ts` reads JSON through `c.req.json()` and form bodies through `c.req.arrayBuffer()`, relying on HonoRequest caching rather than direct raw body reads.
 - `src/middleware/body-limit/index.ts` reads a Web `ReadableStream` through `getReader()` and then reconstructs `c.req.raw = new Request(c.req.raw, { body: new ReadableStream(...) })` before calling `next()`.
 - Hono adapters support web-standard request runtimes such as Cloudflare Workers, Deno, Bun, service workers, Vercel, Netlify, Lambda Edge, and AWS Lambda. Node-specific APIs appear inside Node/AWS adapter code, not generic middleware.

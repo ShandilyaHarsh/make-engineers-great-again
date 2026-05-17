@@ -40,7 +40,7 @@ The real Cal.com codebase already has these relevant contracts:
 - `getUserAvailability` eventually calls the busy-times service with user credentials, selected calendars, buffers, event type context, and date range. That provider path is the expensive boundary.
 - Google Calendar availability is fetched through freebusy calls and long ranges are chunked because provider APIs have range limits and quota pressure.
 - Team availability aggregation in `getAggregatedAvailability` composes already-built date ranges and busy windows; it does not make authorization decisions for which users may be loaded.
-- Private members and routed team hosts are product-level concepts, so filters that look like display filters can become real authorization boundaries.
+- Private members and routed team hosts are product-level concepts, so filters that look like display filters can become real authorization boundaries even if the final JSON response hides private fields.
 
 ## Learner Task
 

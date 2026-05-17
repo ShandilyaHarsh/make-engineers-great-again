@@ -23,7 +23,7 @@ The PR description says submit is "idempotent for the same cart and idempotency 
 The real Medusa codebase already has these relevant contracts:
 
 - `packages/medusa/src/api/store/carts/[id]/complete/route.ts` invokes `completeCartWorkflow` through the workflow engine and returns either an order or a still-actionable cart.
-- `completeCartWorkflow` acquires a cart lock, checks the existing `order_cart` link for the cart, validates cart items/shipping/payments, creates the order, links order and cart, marks the cart completed, reserves inventory, registers promotion usage, emits the order placed event, and authorizes payment.
+- `completeCartWorkflow` acquires a cart lock, checks the existing `order_cart` link for the cart, validates cart items/shipping/payments, creates the order, links order and cart, marks the cart completed, reserves inventory, registers promotion usage, emits the `order.placed` event, and authorizes payment.
 - `completeCartWorkflow` is marked `idempotent: false`, so safety comes from the cart lock, the existing order-cart link check, workflow compensation, and step ordering.
 - `reserveInventoryStep` reserves inventory inside the workflow under inventory item locks and has compensation that deletes reservations if a later step fails.
 - `validateCartStep` rejects carts with `completed_at`, but only after the route/workflow actually reads the cart state in the protected completion flow.

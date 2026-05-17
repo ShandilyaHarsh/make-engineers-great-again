@@ -37,7 +37,7 @@ The real Payload codebase already has these relevant contracts:
 - `CollectionConfig.access` returns `true`, `false`, or a portable `Where` constraint. Collection authors do not write Postgres, MongoDB, or SQLite query plans in collection config.
 - `findOperation` executes access, combines the caller `where` with the access `Where`, sanitizes and validates paths, then passes the combined `Where` to `payload.db.find`.
 - `findByIDOperation` follows the same access pattern: execute access, combine with `id`, sanitize paths, and send a portable query to the adapter.
-- Drizzle/Postgres and MongoDB have separate query builders that translate the common `Where` representation into adapter-specific SQL or Mongo filters.
+- Drizzle/Postgres and MongoDB have separate query builders and adapter capability APIs that translate the common `Where` representation into adapter-specific SQL or Mongo filters.
 - Query path validation and `sanitizeWhereQuery` operate on Payload field config and `Where`, not on database-specific optimizer directives.
 
 ## Learner Task

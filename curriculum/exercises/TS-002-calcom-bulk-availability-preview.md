@@ -1115,8 +1115,8 @@ Expected answer:
 Hints:
 
 1. Compare the new service to the path used by the existing v2 slots endpoint.
-2. Ask whether "schedule availability minus accepted bookings" is the full Cal.com availability contract.
-3. The dangerous code is the loop that creates slots from `schedule.availability` instead of delegating to `AvailableSlotsService`.
+2. Ask whether "schedule availability minus accepted bookings" is the full Cal.diy availability contract.
+3. The dangerous code is the loop that reads `host.schedule?.availability ?? eventType.availability` instead of delegating to `AvailableSlotsService`.
 
 ### Flaw 2: Debug Busy Details Leak Private Booking Data
 

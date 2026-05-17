@@ -37,7 +37,7 @@ The real Directus codebase already has these relevant contracts:
 - `api/src/permissions/modules/process-ast/process-ast.ts` fetches policies and permissions, validates requested field paths, and calls `injectCases` to attach permission cases to the AST.
 - `api/src/permissions/modules/process-ast/lib/get-cases.ts` deduplicates permission access and builds the case map used by the read pipeline.
 - `api/src/database/run-ast/lib/apply-query/index.ts` merges user filters with permission cases via `joinFilterWithCases` before calling `applyFilter`.
-- `api/src/database/run-ast/lib/apply-query/filter/index.ts` already has relation-aware filter handling. For top-level one-to-many `_some`/`_none`, it builds a subquery through `applyQuery` rather than flattening everything into the root query joins.
+- `api/src/database/run-ast/lib/apply-query/filter/index.ts` already has relation-aware filter handling. For top-level one-to-many `_some`/`_none`, it builds a subquery/EXISTS-style predicate through `applyQuery` rather than flattening everything into the root query joins.
 - `api/src/database/run-ast/lib/get-db-query.ts` treats multi-relational filters and sorts carefully, using an inner query/wrapper query when deduplication and pagination would otherwise be wrong.
 
 ## Learner Task

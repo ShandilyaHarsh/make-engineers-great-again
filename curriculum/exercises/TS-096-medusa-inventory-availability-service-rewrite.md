@@ -41,7 +41,7 @@ The real Medusa codebase already has these relevant contracts:
 - `createReservationItems_` validates available quantity, creates reservation rows, computes per-item/location adjustments, and updates inventory levels transactionally.
 - Cart and reservation workflows call inventory-module reservation methods inside locks keyed by inventory item IDs.
 - `confirmInventory` reads available quantity through the inventory module rather than owning reservation mutations itself.
-- Medusa modules and workflows are extension points. Removing or changing reservation APIs affects custom modules, admin routes, workflows, plugins, and external integrations.
+- Medusa modules and workflows are extension points. Removing or changing reservation APIs affects custom modules, admin routes, workflows, plugins, and external integrations; compatibility behavior needs to preserve create/update/delete/list semantics during rollout.
 
 ## Learner Task
 

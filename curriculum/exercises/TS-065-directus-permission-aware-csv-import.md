@@ -36,6 +36,7 @@ The real Directus codebase already has these relevant contracts:
 - `ItemsService.createOne` and update paths call `processPayload` with the request accountability before writing.
 - `processPayload` fetches policies, field permissions, presets, permission validation rules, field validation rules, and dynamic variable data.
 - `validateAccess` has different paths for collection access and item access; item access requires primary keys and can return allowed root fields.
+- Dynamic row rules such as `tenant_id = $CURRENT_USER.tenant_id` are enforced by permission validation, not by a field allowlist alone.
 - `fetchAllowedFields` returns allowed fields for a collection/action/policy combination, but field allowlists alone do not evaluate row-level validation rules.
 - Existing import code groups row errors and uses Directus action events after import work completes.
 

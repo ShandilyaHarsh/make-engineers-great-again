@@ -34,7 +34,7 @@ The real Langfuse codebase already has these relevant contracts:
 
 - `packages/shared/clickhouse/migrations/unclustered/0001_traces.up.sql` creates the ClickHouse `traces` table. It is a `ReplacingMergeTree` partitioned by `toYYYYMM(timestamp)` and ordered by project/date/id.
 - `packages/shared/src/server/services/traces-ui-table-service.ts` is the central trace table query path. `getTracesTable`, `getTracesTableCount`, `getTracesTableMetrics`, and `getTraceIdentifiers` all flow through `getTracesTableGeneric`.
-- `packages/shared/src/tableDefinitions/tracesTable.ts` and `packages/shared/src/server/tableMappings/mapTracesTable.ts` define which UI filters map to which ClickHouse columns.
+- `packages/shared/src/tableDefinitions/tracesTable.ts` and `packages/shared/src/server/tableMappings/mapTracesTable.ts` define the TypeScript schema for which UI filters map to which ClickHouse columns.
 - `packages/shared/src/server/repositories/definitions.ts` defines `traceRecordReadSchema` and `traceRecordInsertSchema`; `traces_converters.ts` maps ClickHouse trace records into `TraceDomain`.
 - `worker/src/services/IngestionService/index.ts` merges trace events, writes ClickHouse trace records, and already derives aggregate trace-level facts from observations.
 - `packages/shared/prisma/schema.prisma` still contains `LegacyPrismaTrace`, and `worker/src/backgroundMigrations/migrateTracesFromPostgresToClickhouse.ts` shows that historical trace migration is handled in resumable batches.

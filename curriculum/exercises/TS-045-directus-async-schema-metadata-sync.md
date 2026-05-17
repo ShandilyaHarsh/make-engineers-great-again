@@ -40,6 +40,7 @@ The real Directus codebase already has these relevant contracts:
 - `api/src/utils/validate-diff.ts` rejects stale apply requests when the supplied hash does not match the current versioned snapshot hash unless the caller explicitly forces the apply. That hash is the current concurrency contract.
 - `api/src/utils/apply-diff.ts` applies collection, field, system-field, and relation changes inside a transaction, coordinates pre/post column change hooks, suppresses nested action events until a fresh schema is available, and flushes caches once after the apply.
 - `api/src/services/collections.ts`, `api/src/services/fields.ts`, and `api/src/services/relations.ts` update metadata rows through item services and clear schema/system caches when called directly.
+- Field metadata includes option paths such as `orders.status.options`; those queued values can conflict with later admin edits.
 - `api/src/utils/get-schema.ts` uses a shared lock while preparing cached schema and supports `bypassCache` for callers that need a fresh database view.
 - `api/src/database/migrations/run.ts` mutates schema and flushes caches after migrations. `api/src/database/index.ts` can detect outstanding migrations with `validateMigrations()`, and `api/src/app.ts` warns when migrations have not all run.
 - `api/src/lock/lib/use-lock.ts` provides the shared Redis/local KV lock used by schedules and cross-process coordination.
