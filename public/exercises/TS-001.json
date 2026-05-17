@@ -14,6 +14,159 @@
   "mode": "synthetic_degraded",
   "prDescription": "This PR adds a public API endpoint that lets SDK users create a dataset run from a list of existing trace IDs.\n\nToday users can add one dataset run item at a time through `POST /api/public/dataset-run-items`. That is slow for eval workflows where the user already has a list of trace IDs and wants to create a run in one request. The new endpoint accepts:\n\n- dataset id\n- run name and optional description\n- trace ids\n- optional per-trace metadata\n- optional `createdAtByTraceId` map for imported historical eval runs\n\nThe endpoint creates or fetches the dataset run, validates trace IDs, writes dataset run item events through the existing ingestion path, and returns the created run item ids.",
   "existingCodeContext": "The real Langfuse codebase already has the following relevant contracts:\n\n- `web/src/pages/api/public/dataset-run-items.ts` creates a single dataset run item and resolves `datasetItem` with `projectId: auth.scope.projectId`.\n- `web/src/pages/api/public/dataset-run-items.ts` resolves an observation with `getObservationById({ id, projectId: auth.scope.projectId })`.\n- `web/src/features/public-api/server/dataset-runs.ts` creates/fetches a dataset run by `(datasetId, projectId, name)`.\n- `packages/shared/prisma/schema.prisma` models `Dataset`, `DatasetItem`, `DatasetRuns`, and `DatasetRunItems` with project ids and composite project-owned keys.\n- `packages/shared/src/server/repositories/traces.ts` exposes `getTraceById({ traceId, projectId, ... })`, so trace lookup is expected to be project-scoped.\n- `packages/shared/src/server/ingestion/types.ts` treats dataset run item creation as internal ingestion only.\n\nRelevant existing helper signatures visible for this review:\n\n```ts\n// web/src/pages/api/public/dataset-run-items.ts\nconst observation = body.observationId\n  ? await getObservationById({\n      id: body.observationId,\n      projectId: auth.scope.projectId,\n    })\n  : undefined;\n```\n\n```ts\n// packages/shared/src/server/repositories/traces.ts\nexport const getTraceById = async ({\n  traceId,\n  projectId,\n  timestamp,\n}: {\n  traceId: string;\n  projectId: string;\n  timestamp?: Date;\n}) => {\n  return await queryTrace({ traceId, projectId, timestamp });\n};\n```",
+  "contextFiles": [
+    {
+      "oldPath": "web/src/pages/api/public/dataset-run-items.ts",
+      "newPath": "web/src/pages/api/public/dataset-run-items.ts",
+      "language": "typescript",
+      "hunks": [
+        {
+          "header": "@@ existing context @@",
+          "oldStart": 1,
+          "newStart": 1,
+          "lines": [
+            {
+              "id": "web/src/pages/api/public/dataset-run-items.ts:1",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 1,
+              "content": "const observation = body.observationId"
+            },
+            {
+              "id": "web/src/pages/api/public/dataset-run-items.ts:2",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 2,
+              "content": "  ? await getObservationById({"
+            },
+            {
+              "id": "web/src/pages/api/public/dataset-run-items.ts:3",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 3,
+              "content": "      id: body.observationId,"
+            },
+            {
+              "id": "web/src/pages/api/public/dataset-run-items.ts:4",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 4,
+              "content": "      projectId: auth.scope.projectId,"
+            },
+            {
+              "id": "web/src/pages/api/public/dataset-run-items.ts:5",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 5,
+              "content": "    })"
+            },
+            {
+              "id": "web/src/pages/api/public/dataset-run-items.ts:6",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 6,
+              "content": "  : undefined;"
+            }
+          ]
+        }
+      ],
+      "additions": 0,
+      "deletions": 0
+    },
+    {
+      "oldPath": "packages/shared/src/server/repositories/traces.ts",
+      "newPath": "packages/shared/src/server/repositories/traces.ts",
+      "language": "typescript",
+      "hunks": [
+        {
+          "header": "@@ existing context @@",
+          "oldStart": 1,
+          "newStart": 1,
+          "lines": [
+            {
+              "id": "packages/shared/src/server/repositories/traces.ts:1",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 1,
+              "content": "export const getTraceById = async ({"
+            },
+            {
+              "id": "packages/shared/src/server/repositories/traces.ts:2",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 2,
+              "content": "  traceId,"
+            },
+            {
+              "id": "packages/shared/src/server/repositories/traces.ts:3",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 3,
+              "content": "  projectId,"
+            },
+            {
+              "id": "packages/shared/src/server/repositories/traces.ts:4",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 4,
+              "content": "  timestamp,"
+            },
+            {
+              "id": "packages/shared/src/server/repositories/traces.ts:5",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 5,
+              "content": "}: {"
+            },
+            {
+              "id": "packages/shared/src/server/repositories/traces.ts:6",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 6,
+              "content": "  traceId: string;"
+            },
+            {
+              "id": "packages/shared/src/server/repositories/traces.ts:7",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 7,
+              "content": "  projectId: string;"
+            },
+            {
+              "id": "packages/shared/src/server/repositories/traces.ts:8",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 8,
+              "content": "  timestamp?: Date;"
+            },
+            {
+              "id": "packages/shared/src/server/repositories/traces.ts:9",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 9,
+              "content": "}) => {"
+            },
+            {
+              "id": "packages/shared/src/server/repositories/traces.ts:10",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 10,
+              "content": "  return await queryTrace({ traceId, projectId, timestamp });"
+            },
+            {
+              "id": "packages/shared/src/server/repositories/traces.ts:11",
+              "type": "context",
+              "oldLine": null,
+              "newLine": 11,
+              "content": "};"
+            }
+          ]
+        }
+      ],
+      "additions": 0,
+      "deletions": 0
+    }
+  ],
   "learnerTask": "Review the PR. Identify the two intended flaws. For each flaw:\n\n1. Name the flaw.\n2. Cite the relevant file and line range from the diff.\n3. Explain the production impact.\n4. Suggest the better implementation direction.",
   "reviewSurface": [
     "web/src/features/public-api/types/dataset-runs-from-traces.ts",
@@ -5678,6 +5831,11 @@
         "Look at the ownership boundary between a dataset and the trace ids supplied by the client.",
         "Compare the new helper signature with existing trace/observation lookup helpers that require projectId.",
         "The dangerous query is the raw trace lookup in getTraceCandidatesForDatasetRun; it never mentions projectId."
+      ],
+      "reviewAnchors": [
+        "web/src/features/public-api/server/dataset-runs-from-traces.ts:92-125",
+        "web/src/features/public-api/server/dataset-runs-from-traces.ts:127-146",
+        "web/src/features/public-api/server/dataset-runs-from-traces.ts:184-186"
       ]
     },
     {
@@ -5693,6 +5851,12 @@
         "Ask what createdAt means for a newly-created dataset run item.",
         "Follow createdAtByTraceId into resolveItemCreatedAt, then into buildRunItemEvent.",
         "The internal event timestamp is being set to a user-provided or trace-observed time instead of the time the mutation was accepted."
+      ],
+      "reviewAnchors": [
+        "web/src/features/public-api/types/dataset-runs-from-traces.ts:113-126",
+        "web/src/features/public-api/server/dataset-runs-from-traces.ts:64-84",
+        "web/src/features/public-api/server/dataset-runs-from-traces.ts:217-225",
+        "web/src/features/public-api/server/dataset-runs-from-traces.ts:264-269"
       ]
     }
   ],

@@ -54,6 +54,7 @@ export type ExerciseFlaw = {
   expectedFix: string;
   goldenAnswer: string;
   hints: string[];
+  reviewAnchors?: string[];
 };
 
 export type Exercise = {
@@ -72,6 +73,7 @@ export type Exercise = {
   mode: string;
   prDescription: string;
   existingCodeContext: string;
+  contextFiles?: DiffFile[];
   learnerTask: string;
   reviewSurface: string[];
   diff: {

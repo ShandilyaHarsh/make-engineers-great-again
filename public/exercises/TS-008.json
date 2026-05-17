@@ -4002,6 +4002,11 @@
         "Compare the new merge order with the existing comment in MergePreferences.",
         "Follow one channel where global says false and workflow-specific subscriber preference says true.",
         "The bug is the new override preference being appended at the end of preferencesList."
+      ],
+      "reviewAnchors": [
+        "libs/application-generic/src/usecases/merge-preferences/merge-preferences.usecase.ts:45-85",
+        "apps/api/src/app/subscribers-v2/usecases/update-subscriber-channel-overrides/update-subscriber-channel-overrides.usecase.ts:38-151",
+        "apps/api/src/app/subscribers-v2/e2e/channel-preference-overrides.e2e.ts:5-43"
       ]
     },
     {
@@ -4017,6 +4022,11 @@
         "A response version is only useful if the next write proves which version it edited.",
         "Look at the update filter, not only the response DTO.",
         "The missing test is two clients reading the same version and saving different channel changes."
+      ],
+      "reviewAnchors": [
+        "apps/api/src/app/subscribers-v2/dtos/channel-preference-overrides.dto.ts:45-70",
+        "apps/api/src/app/subscribers-v2/usecases/update-subscriber-channel-overrides/update-subscriber-channel-overrides.usecase.ts:38-65",
+        "apps/api/src/app/subscribers-v2/e2e/channel-preference-overrides.e2e.ts:45-72"
       ]
     }
   ],

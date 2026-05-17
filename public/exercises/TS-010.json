@@ -6147,6 +6147,12 @@
         "Type names and runtime guarantees are separate contracts.",
         "Follow what happens after the second item throws in the server loop.",
         "The test that says partial results happen in atomic mode is locking in the bug."
+      ],
+      "reviewAnchors": [
+        "packages/client/src/links/internalBatchLink.ts:20-61",
+        "packages/server/src/unstable-core-do-not-import/http/internalBatch.ts:58-65",
+        "packages/server/src/unstable-core-do-not-import/http/internalBatch.ts:127-205",
+        "packages/tests/server/internalBatchLink.test.ts:160-207"
       ]
     },
     {
@@ -6162,6 +6168,12 @@
         "Compare this link to httpBatchLink, which has separate loaders for query and mutation.",
         "Search the server parser for the existing mixed procedure type rejection.",
         "The retry test's duplicated audit entry is not a harmless assertion. It is the production failure mode."
+      ],
+      "reviewAnchors": [
+        "packages/client/src/links/internalBatchLink.ts:87-128",
+        "packages/server/src/unstable-core-do-not-import/http/internalBatch.ts:107-125",
+        "packages/tests/server/internalBatchLink.test.ts:136-158",
+        "packages/tests/server/internalBatchLink.test.ts:220-291"
       ]
     }
   ],

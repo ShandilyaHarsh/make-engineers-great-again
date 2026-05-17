@@ -7468,6 +7468,12 @@
         "Compare this PR to the transfer cancellation workflow, which treats actor_type: \"user\" and actor_type: \"customer\" differently.",
         "Look at what the admin route passes into the workflow. Which identity is used for validation, and which identity is stored?",
         "A support action can be customer-facing without pretending that the customer performed it."
+      ],
+      "reviewAnchors": [
+        "packages/medusa/src/api/admin/orders/[id]/notes/route.ts:43-78",
+        "packages/core/core-flows/src/order/workflows/create-customer-order-note.ts:23-58",
+        "packages/core/core-flows/src/order/workflows/create-customer-order-note.ts:60-82",
+        "integration-tests/http/admin/order-notes.spec.ts:25-41"
       ]
     },
     {
@@ -7483,6 +7489,13 @@
         "The store query-config warning is a clue: copied admin fields are dangerous on customer-facing APIs.",
         "Search for any field or filter that says whether a note is internal or customer-visible. There is none.",
         "The failing mental model is \"admin-created note\" vs \"customer-visible note.\" Those are separate dimensions."
+      ],
+      "reviewAnchors": [
+        "packages/modules/order/src/models/order-note.ts:7-17",
+        "packages/medusa/src/api/store/orders/query-config.ts:7-50",
+        "packages/medusa/src/api/store/orders/[id]/notes/route.ts:20-43",
+        "packages/medusa/src/api/admin/orders/[id]/notes/route.ts:43-78",
+        "integration-tests/http/store/order-notes.spec.ts:36-58"
       ]
     }
   ],

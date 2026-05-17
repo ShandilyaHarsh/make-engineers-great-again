@@ -7949,6 +7949,11 @@
         "Compare this helper to jwt, bearerAuth, and basicAuth. When do those call next()?",
         "In the tests, look for required: true plus an invalid Authorization header. What status code is expected?",
         "\"No token\" and \"bad token\" are different security events. A reviewer should not let them share the same default branch."
+      ],
+      "reviewAnchors": [
+        "src/middleware/optional-auth/index.ts:154-181",
+        "src/middleware/optional-auth/index.test.ts:171-234",
+        "src/middleware/optional-auth/index.test.ts:251-262"
       ]
     },
     {
@@ -7964,6 +7969,12 @@
         "Hono's existing type tests check that middleware variables are visible only where middleware is chained. Does this PR preserve that?",
         "Search for declare module '../..'. What does it add to every Context, even unrelated routes?",
         "Optional route context and required route context should not have the same type."
+      ],
+      "reviewAnchors": [
+        "src/middleware/optional-auth/index.ts:34-35",
+        "src/middleware/optional-auth/types.ts:47-72",
+        "src/middleware/optional-auth/types.test.ts:47-65",
+        "src/middleware/optional-auth/types.test.ts:99-110"
       ]
     }
   ],

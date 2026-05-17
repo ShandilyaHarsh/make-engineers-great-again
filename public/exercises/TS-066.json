@@ -14044,6 +14044,11 @@
         "Follow the state transition from \"cart not completed\" to \"order exists\" rather than starting with the route.",
         "Ask which row or lock makes two concurrent requests serialize on the same cart.",
         "The migration creates indexes, but no unique constraint; the workflow reads before writing under no cart lock."
+      ],
+      "reviewAnchors": [
+        "packages/core/core-flows/src/cart/workflows/submit-checkout.ts:78-281",
+        "packages/core/core-flows/src/cart/steps/create-checkout-submit-attempt.ts:28-61",
+        "packages/modules/cart/src/migrations/Migration20260601090000.ts:28-46"
       ]
     },
     {
@@ -14059,6 +14064,11 @@
         "Compare the order of side effects in completeCartWorkflow with the new submit workflow.",
         "Find where order.placed, updateCartsStep, and reserveInventoryAfterSubmitStep appear relative to each other.",
         "The PR docs promise no order without inventory reservation, but the code emits and links the order first."
+      ],
+      "reviewAnchors": [
+        "packages/core/core-flows/src/cart/workflows/submit-checkout.ts:286-375",
+        "packages/core/core-flows/src/cart/workflows/submit-checkout.ts:406-455",
+        "packages/core/core-flows/src/cart/steps/reserve-inventory-after-submit.ts:22-62"
       ]
     }
   ],

@@ -4084,6 +4084,12 @@
         "Ask whether the product is storing a label or creating a reusable operational taxonomy.",
         "Compare a JSON string list with the questions support and operations will ask later: who, when, why, rename, delete, report.",
         "The suspicious places are the new tags order column and the helper that only trims strings before saving them."
+      ],
+      "reviewAnchors": [
+        "packages/modules/order/src/models/order.ts:19-83",
+        "packages/modules/order/src/types/order.ts:8-31",
+        "packages/modules/order/src/migrations/Migration20260501123000.ts:4-32",
+        "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:1-113"
       ]
     },
     {
@@ -4099,6 +4105,10 @@
         "Start from how the existing admin order update endpoint changes an order.",
         "Look for order changes, workflow steps, and events, not only for a successful database write.",
         "The key line is the route-level orderModuleService.updateOrders(...) call; compare it to updateOrderWorkflow(req.scope).run(...)."
+      ],
+      "reviewAnchors": [
+        "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:39-154",
+        "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:23-96"
       ]
     }
   ],

@@ -9953,6 +9953,10 @@
         "Look for the identifier the customer can use to dedupe callback deliveries.",
         "Compare the internal delivery row ID with the event ID in the payload and the worker enqueue IDs.",
         "generateFriendlyId(\"rce\") runs inside payload construction, and Date.now() is part of both enqueue IDs."
+      ],
+      "reviewAnchors": [
+        "apps/webapp/app/v3/services/completionCallbacks/performRunCompletionCallbacks.server.ts:83-124",
+        "apps/webapp/app/v3/services/completionCallbacks/deliverRunCompletionCallback.server.ts:80-156"
       ]
     },
     {
@@ -9968,6 +9972,11 @@
         "Search for the first branch that handles !response.ok.",
         "Compare this logic with Trigger.dev retry helpers that only retry selected status codes.",
         "The test saying 401 should retry is not a reassurance; it is evidence of the wrong contract being encoded."
+      ],
+      "reviewAnchors": [
+        "apps/webapp/app/v3/services/completionCallbacks/deliverRunCompletionCallback.server.ts:80-134",
+        "apps/webapp/app/v3/completionCallbacksWorker.server.ts:35-55",
+        "apps/webapp/test/runCompletionCallbacks.test.ts:54-74"
       ]
     }
   ],

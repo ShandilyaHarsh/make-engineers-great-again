@@ -8739,6 +8739,11 @@
         "Start from the tenant boundary. The key is scoped; check whether the role and permission paths carry that same scope all the way through.",
         "Compare the PR to Unkey's existing pattern: update-rbac.ts validates key, roles, and permissions against ctx.workspace.id before writing join rows.",
         "In update-key-roles.ts, the role query uses only inArray(table.id, uniqueRoleIds). In resolve-effective-permissions.ts, the role expansion query filters by role ID but not by workspace."
+      ],
+      "reviewAnchors": [
+        "web/apps/dashboard/lib/trpc/routers/key/rbac/update-key-roles.ts:55-82",
+        "web/apps/dashboard/lib/trpc/routers/key/rbac/resolve-effective-permissions.ts:27-50",
+        "web/apps/dashboard/lib/trpc/routers/key/rbac/resolve-effective-permissions.ts:134-151"
       ]
     },
     {
@@ -8754,6 +8759,12 @@
         "Ask whether \"role\" means a live permission bundle or a one-time copy of permissions.",
         "Follow a permission from role creation to key verification. Does the code read the role-permission join table when the key is verified, or only when the key is changed?",
         "The test named \"does not change an old snapshot when the role object is edited later\" is a smell: it locks in stale authorization behavior without explaining that as a product contract."
+      ],
+      "reviewAnchors": [
+        "web/apps/dashboard/lib/trpc/routers/key/rbac/role-permission-snapshot.ts:23-83",
+        "web/apps/dashboard/lib/trpc/routers/key/rbac/create-key-with-roles.ts:87-96",
+        "web/apps/dashboard/lib/trpc/routers/authorization/roles/upsert.ts:176-211",
+        "web/apps/dashboard/lib/trpc/routers/key/rbac/role-permission-snapshot.test.ts:24-55"
       ]
     }
   ],

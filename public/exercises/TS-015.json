@@ -5775,6 +5775,12 @@
         "\"Snapshot\" implies future interpretation. Look for a version number or shape discriminator.",
         "A Where object and a boolean do not mean the same thing, but this shape makes them peers.",
         "Compare the stated product question to what the stored JSON can actually explain later."
+      ],
+      "reviewAnchors": [
+        "packages/payload/src/versions/types.ts:1-24",
+        "packages/payload/src/access-policy-snapshots/buildAccessPolicySnapshot.ts:1-83",
+        "packages/payload/src/versions/baseFields.ts:1-18",
+        "test/versions/policy-snapshots.int.spec.ts:1-94"
       ]
     },
     {
@@ -5790,6 +5796,11 @@
         "Migrations are historical artifacts; imported application helpers keep changing.",
         "Access functions can depend on env vars, plugins, network clients, current roles, and current config.",
         "The migration claims to reconstruct the past but evaluates today's policy code."
+      ],
+      "reviewAnchors": [
+        "packages/payload/src/database/migrations/20260514110000_backfill_access_policy_snapshots.ts:1-80",
+        "packages/payload/src/access-policy-snapshots/buildAccessPolicySnapshot.ts:49-83",
+        "test/versions/policy-snapshots.int.spec.ts:96-122"
       ]
     }
   ],

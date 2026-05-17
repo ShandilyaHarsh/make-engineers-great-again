@@ -6132,6 +6132,11 @@
         "Compare the new referential actions to the existing parentTaskRun and rootTaskRun relations.",
         "A graph for debugging old runs is history, not just cache.",
         "The test that deletes the parent is not harmless; it codifies the data-loss behavior."
+      ],
+      "reviewAnchors": [
+        "internal-packages/database/prisma/schema.prisma:1098-1129",
+        "internal-packages/database/prisma/migrations/20260516103000_add_task_run_graph_edges/migration.sql:18-49",
+        "apps/webapp/test/runGraph.test.ts:139-187"
       ]
     },
     {
@@ -6147,6 +6152,12 @@
         "Search for visited, ancestor, cycle, or parentRunId === childRunId in the new service.",
         "A unique (parent, child) edge does not prevent A -> B -> C -> A.",
         "Traversal code without a visited set turns graph corruption into request or worker hangs."
+      ],
+      "reviewAnchors": [
+        "apps/webapp/app/services/runGraph/runGraphService.server.ts:44-118",
+        "apps/webapp/app/services/runGraph/runGraphService.server.ts:171-222",
+        "apps/webapp/app/runEngine/services/triggerTask.server.ts:437-461",
+        "apps/webapp/test/runGraph.test.ts:42-223"
       ]
     }
   ],

@@ -5629,6 +5629,13 @@
         "workspaceProcedure authenticates the caller's workspace; it does not automatically scope arbitrary rows.",
         "Compare the key lookup predicate with the workspace-scoped key update patterns described in the existing code context.",
         "The test that uses otherWorkspace is not harmless fixture setup. It documents the broken boundary."
+      ],
+      "reviewAnchors": [
+        "web/apps/dashboard/lib/trpc/routers/key/updateMetadata.ts:14-45",
+        "web/apps/dashboard/lib/trpc/routers/key/updateMetadata.ts:57-69",
+        "web/apps/dashboard/lib/trpc/routers/key/updatePublicMetadata.ts:18-47",
+        "web/apps/dashboard/lib/trpc/routers/key/updatePublicMetadata.ts:61-71",
+        "web/apps/dashboard/test/key-metadata.test.ts:218-282"
       ]
     },
     {
@@ -5644,6 +5651,12 @@
         "The real verifier cache is keyed by key hash, while the new event only carries keyId.",
         "Reading the database after the mutation does not prove the edge verifier has dropped its cached value.",
         "Any metadata used in authorization context is data-plane state, even if the edit happens in the dashboard."
+      ],
+      "reviewAnchors": [
+        "web/apps/dashboard/lib/trpc/routers/key/updateMetadata.ts:71-101",
+        "web/apps/dashboard/lib/trpc/routers/key/updatePublicMetadata.ts:73-103",
+        "web/apps/dashboard/lib/trpc/routers/key/metadataAudit.ts:49-84",
+        "web/apps/dashboard/test/key-metadata.test.ts:190-216"
       ]
     }
   ],

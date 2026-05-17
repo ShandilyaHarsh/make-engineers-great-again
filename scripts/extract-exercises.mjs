@@ -160,6 +160,46 @@ function parseDiff(rawDiff) {
   return files;
 }
 
+function parseContextFiles(existingCodeContext) {
+  const files = [];
+  const fencePattern = /```([A-Za-z0-9_-]*)\n([\s\S]*?)```/g;
+
+  for (const match of existingCodeContext.matchAll(fencePattern)) {
+    const language = match[1] || "text";
+    const rawCode = (match[2] ?? "").replace(/\n$/, "");
+    if (!rawCode.trim()) continue;
+
+    const rawLines = rawCode.split("\n");
+    const pathComment = rawLines[0]?.trim().match(/^(?:(?:\/\/)|#|--)\s+(.+)$/);
+    const filePath = pathComment?.[1]?.trim() || `Existing context snippet ${files.length + 1}`;
+    const codeLines = pathComment ? rawLines.slice(1) : rawLines;
+
+    files.push({
+      oldPath: filePath,
+      newPath: filePath,
+      language: languageForPath(filePath) === "text" ? language : languageForPath(filePath),
+      hunks: [
+        {
+          header: "@@ existing context @@",
+          oldStart: 1,
+          newStart: 1,
+          lines: codeLines.map((content, index) => ({
+            id: `${filePath}:${index + 1}`,
+            type: "context",
+            oldLine: null,
+            newLine: index + 1,
+            content,
+          })),
+        },
+      ],
+      additions: 0,
+      deletions: 0,
+    });
+  }
+
+  return files;
+}
+
 function languageForPath(filePath) {
   const ext = path.extname(filePath).replace(".", "");
   return (
@@ -211,6 +251,7 @@ function parseDirectFlawSections(markdown) {
     const next = matches[index + 1]?.index ?? markdown.indexOf("\n## Expert Debrief", start);
     const end = next === -1 ? markdown.length : next;
     const body = markdown.slice(start, end).trim();
+    const reviewAnchors = extractReviewAnchors(body);
     return {
       id: `flaw-${match[1]}`,
       number: Number(match[1]),
@@ -227,6 +268,7 @@ function parseDirectFlawSections(markdown) {
         .filter(Boolean)
         .join("\n\n"),
       hints: extractHints(body),
+      ...(reviewAnchors.length > 0 ? { reviewAnchors } : {}),
     };
   });
 }
@@ -248,7 +290,24 @@ function parseLegacyFlaw(number, title, body) {
     expectedFix: "",
     goldenAnswer: expected,
     hints: extractNumberedList(hintsBlock),
+    ...(extractReviewAnchors(body).length > 0 ? { reviewAnchors: extractReviewAnchors(body) } : {}),
   };
+}
+
+function extractReviewAnchors(body) {
+  const rawLocation = body.match(/^- `location`:\s+(.+)$/m)?.[1];
+  if (!rawLocation) return [];
+
+  let lastPath = "";
+  return [...rawLocation.matchAll(/`([^`]+)`/g)]
+    .map((match) => match[1].trim())
+    .filter(Boolean)
+    .map((anchor) => {
+      const normalized = anchor.startsWith(":") && lastPath ? `${lastPath}${anchor}` : anchor;
+      const pathMatch = normalized.match(/^(.+?):\d+(?:-\d+)?$/);
+      if (pathMatch?.[1]) lastPath = pathMatch[1];
+      return normalized;
+    });
 }
 
 function attachSeparateHintSections(markdown, flaws) {
@@ -354,6 +413,8 @@ function parseExercise(fileName, markdown) {
   const metadata = parseMetadata(markdown);
   const rawDiff = extractDiff(markdown);
   const files = parseDiff(rawDiff);
+  const existingCodeContext = section(markdown, "Existing Code Context");
+  const contextFiles = parseContextFiles(existingCodeContext);
   const sourceRepo = metadata.source_repo;
 
   return {
@@ -374,7 +435,8 @@ function parseExercise(fileName, markdown) {
     representedDiffLines: Number(metadata.represented_diff_lines ?? rawDiff.split("\n").length),
     mode: metadata.mode ?? "synthetic_degraded",
     prDescription: section(markdown, "PR Description Shown To Learner"),
-    existingCodeContext: section(markdown, "Existing Code Context"),
+    existingCodeContext,
+    ...(contextFiles.length > 0 ? { contextFiles } : {}),
     learnerTask: section(markdown, "Learner Task"),
     reviewSurface: parseReviewSurface(markdown),
     diff: {

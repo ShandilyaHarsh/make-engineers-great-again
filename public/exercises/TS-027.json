@@ -9186,6 +9186,13 @@
         "Search for the existing unique index and existing repository lookup for subscribers.",
         "Follow the command fields into the actual Mongo query. Passing environmentId through a command does not matter if the repository ignores it.",
         "The cache key repeats the same mistake as the query: it has the external ID but no environment or organization boundary."
+      ],
+      "reviewAnchors": [
+        "libs/dal/src/repositories/subscriber/subscriber.repository.ts:20-35",
+        "apps/api/src/app/subscribers/usecases/get-subscriber-by-external-id/get-subscriber-by-external-id.usecase.ts:28-40",
+        "apps/api/src/app/subscribers/usecases/get-subscriber-by-external-id/get-subscriber-by-external-id.usecase.ts:63-65",
+        "apps/api/src/app/subscribers/usecases/update-external-subscriber-preferences/update-external-subscriber-preferences.usecase.ts:80-88",
+        "apps/api/src/app/subscribers/usecases/get-subscriber-by-external-id/get-subscriber-by-external-id.usecase.spec.ts:68-89"
       ]
     },
     {
@@ -9201,6 +9208,13 @@
         "Authentication answers \"which credential was allowed to call the API\"; actor context answers \"who made this product decision.\"",
         "The command source says PREFERENCE_CENTER, but the audit row says dashboard_user.",
         "A good fix is not to drop audit. It is to carry two identities when needed: the subscriber actor and the authenticated service/dashboard actor."
+      ],
+      "reviewAnchors": [
+        "apps/api/src/app/subscribers/subscribersV1.controller.ts:241-265",
+        "apps/api/src/app/subscribers/subscribersV1.controller.ts:277-304",
+        "apps/api/src/app/subscribers/usecases/update-external-subscriber-preferences/update-external-subscriber-preferences.usecase.ts:151-170",
+        "libs/dal/src/repositories/preferences/preference-audit.entity.ts:46-63",
+        "apps/api/src/app/subscribers/usecases/update-external-subscriber-preferences/update-external-subscriber-preferences.usecase.spec.ts:75-105"
       ]
     }
   ],

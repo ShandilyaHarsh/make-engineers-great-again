@@ -7091,6 +7091,12 @@
         "Compare the new service to the path used by the existing v2 slots endpoint.",
         "Ask whether \"schedule availability minus accepted bookings\" is the full Cal.diy availability contract.",
         "The dangerous code is the loop that reads host.schedule?.availability ?? eventType.availability instead of delegating to AvailableSlotsService."
+      ],
+      "reviewAnchors": [
+        "apps/api/v2/src/modules/slots/slots-2024-09-04/services/bulk-availability-preview.service.ts:56-90",
+        "apps/api/v2/src/modules/slots/slots-2024-09-04/services/bulk-availability-preview.service.ts:119-186",
+        "apps/api/v2/src/modules/slots/slots-2024-09-04/slots.repository.ts:84-170",
+        "apps/api/v2/src/modules/slots/slots-2024-09-04/services/bulk-availability-preview.service.spec.ts:1-182"
       ]
     },
     {
@@ -7106,6 +7112,12 @@
         "Look at the response model before looking at the service.",
         "Check whether privacy flags on the event type affect the returned busy details.",
         "A slot preview can say \"blocked\" without saying \"Investor call with investor@example.com.\""
+      ],
+      "reviewAnchors": [
+        "apps/api/v2/src/modules/slots/slots-2024-09-04/outputs/bulk-availability-preview.output.ts:17-51",
+        "apps/api/v2/src/modules/slots/slots-2024-09-04/slots.repository.ts:171-222",
+        "apps/api/v2/src/modules/slots/slots-2024-09-04/services/bulk-availability-preview.service.ts:188-230",
+        "apps/api/v2/src/modules/slots/slots-2024-09-04/services/bulk-availability-preview.service.spec.ts:139-181"
       ]
     }
   ],

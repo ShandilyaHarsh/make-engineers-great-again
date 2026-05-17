@@ -7865,6 +7865,14 @@
         "Compare the new unique index to counterKey in the existing limiter.",
         "In this codebase, Namespace is not globally unique.",
         "The test named NamespaceReuseAcrossWorkspaces is actually blessing the bug."
+      ],
+      "reviewAnchors": [
+        "pkg/mysql/schema/ratelimit_minute_buckets.sql:18-22",
+        "pkg/db/queries/ratelimit_buckets.sql:43-58",
+        "pkg/db/queries/ratelimit_buckets.sql:130-143",
+        "internal/services/ratelimit/persisted_bucket.go:50-62",
+        "internal/services/ratelimit/persisted_bucket.go:193-202",
+        "internal/services/ratelimit/persisted_bucket_test.go:147-183"
       ]
     },
     {
@@ -7880,6 +7888,14 @@
         "Search the diff for time.Now() in the persistence path.",
         "The function takes requestTime, but what value does it actually truncate?",
         "Existing origin sync asserts request time is non-zero because replay must keep the original window."
+      ],
+      "reviewAnchors": [
+        "internal/services/ratelimit/persisted_bucket.go:64-83",
+        "internal/services/ratelimit/persisted_bucket.go:105-136",
+        "internal/services/ratelimit/persisted_bucket.go:159-166",
+        "internal/services/ratelimit/ratelimit.go:227-240",
+        "internal/services/ratelimit/origin.go:69-75",
+        "internal/services/ratelimit/persisted_bucket_test.go:185-196"
       ]
     }
   ],

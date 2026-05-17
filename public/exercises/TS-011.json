@@ -4996,6 +4996,15 @@
         "Follow the column from the migration into the TypeScript schema and then into the default trace table filters.",
         "SQL IN (...) does not match NULL.",
         "The tests create only new-style rows. They never prove compatibility with old traces."
+      ],
+      "reviewAnchors": [
+        "packages/shared/clickhouse/migrations/unclustered/0030_add_trace_status.up.sql:1-3",
+        "packages/shared/src/server/repositories/definitions.ts:119-126",
+        "packages/shared/src/server/repositories/traces.ts:608-672",
+        "packages/shared/src/server/services/traces-ui-table-service.ts:28-39",
+        "packages/shared/src/server/services/traces-ui-table-service.ts:239-252",
+        "packages/shared/src/server/services/traces-ui-table-service.ts:333-336",
+        "web/src/__tests__/server/traces-status.servertest.ts:7-206"
       ]
     },
     {
@@ -5011,6 +5020,12 @@
         "Compare this migration to the existing trace Postgres-to-ClickHouse background migration pattern.",
         "Look for full-table UPDATE or synchronous ClickHouse mutation work in the migration files.",
         "A schema migration should not be responsible for rewriting the whole traces corpus."
+      ],
+      "reviewAnchors": [
+        "packages/shared/clickhouse/migrations/unclustered/0030_add_trace_status.up.sql:5-13",
+        "packages/shared/clickhouse/migrations/clustered/0030_add_trace_status.up.sql:9-18",
+        "packages/shared/prisma/migrations/20260509090000_add_trace_status/migration.sql:1-17",
+        "packages/shared/prisma/schema.prisma:329-346"
       ]
     }
   ],

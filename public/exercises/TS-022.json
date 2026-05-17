@@ -7518,6 +7518,12 @@
         "validateAccess() answers collection/action access, not every field used in a query.",
         "The real extractPathsFromQuery() already knows how to extract aggregate fields for permission validation.",
         "Aggregates over hidden numeric fields are still reads."
+      ],
+      "reviewAnchors": [
+        "api/src/services/items-aggregate.ts:53-74",
+        "api/src/services/items-aggregate.ts:137-166",
+        "api/src/services/items-aggregate.ts:170-190",
+        "api/src/services/items-aggregate.test.ts:222-257"
       ]
     },
     {
@@ -7533,6 +7539,12 @@
         "Compare this count implementation with MetaService.filterCount().",
         "Search for getCases() or joinFilterWithCases() in the new service.",
         "Cardinality can be sensitive even when no row data is returned."
+      ],
+      "reviewAnchors": [
+        "api/src/services/items-aggregate.ts:101-134",
+        "api/src/services/items-aggregate.ts:203-235",
+        "api/src/services/items-aggregate.test.ts:185-220",
+        "api/src/controllers/items.ts:118-146"
       ]
     }
   ],

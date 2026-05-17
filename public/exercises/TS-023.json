@@ -7556,6 +7556,14 @@
         "Compare the arguments accepted by executeAccess with the string returned by getCollectionAccessCacheKey().",
         "A Where result is not the same kind of thing as true.",
         "Look at how docAccess turns one cached result into multiple operation permissions."
+      ],
+      "reviewAnchors": [
+        "packages/payload/src/auth/accessCache/collectionAccessCache.ts:16-31",
+        "packages/payload/src/auth/executeAccess.ts:25-65",
+        "packages/payload/src/collections/operations/docAccess.ts:40-64",
+        "packages/payload/src/auth/accessCache/collectionAccessCache.spec.ts:19-69",
+        "packages/payload/src/auth/accessCache/collectionAccessCache.spec.ts:102-124",
+        "packages/payload/src/auth/accessCache/collectionAccessCache.integration.spec.ts:19-176"
       ]
     },
     {
@@ -7571,6 +7579,14 @@
         "The cache scope records draft, but the key builder never uses it.",
         "Follow replaceWithVersion from findByID into replaceWithDraftIfAvailable.",
         "Draft content is a different resource state from the published document."
+      ],
+      "reviewAnchors": [
+        "packages/payload/src/auth/accessCache/collectionAccessCache.ts:16-31",
+        "packages/payload/src/collections/operations/find.ts:123-132",
+        "packages/payload/src/collections/operations/findByID.ts:112-131",
+        "packages/payload/src/versions/drafts/replaceWithDraftIfAvailable.ts:96-116",
+        "packages/payload/src/auth/accessCache/collectionAccessCache.spec.ts:147-190",
+        "packages/payload/src/auth/accessCache/collectionAccessCache.integration.spec.ts:177-239"
       ]
     }
   ],

@@ -3844,6 +3844,12 @@
         "Separate \"can I access this saved query object?\" from \"can I read the rows this query returns?\"",
         "Find the line where the collection is read. Is it using ItemsService.readByQuery?",
         "A hand-written _eq/_or compiler is not Directus' permission-aware query compiler."
+      ],
+      "reviewAnchors": [
+        "api/src/services/saved-query-export.ts:48-127",
+        "api/src/services/saved-query-export.ts:129-194",
+        "api/src/controllers/utils.ts:184-216",
+        "api/src/services/saved-query-export.test.ts:68-205"
       ]
     },
     {
@@ -3859,6 +3865,12 @@
         "Compare the new export path to ExportService.exportToFile.",
         "Look for await rowsQuery and the place CSV/JSON is built.",
         "A query called \"saved\" can still match millions of rows."
+      ],
+      "reviewAnchors": [
+        "api/src/services/saved-query-export.ts:48-63",
+        "api/src/services/saved-query-export.ts:107-127",
+        "api/src/services/saved-query-export.ts:196-221",
+        "api/src/controllers/utils.ts:199-215"
       ]
     }
   ],

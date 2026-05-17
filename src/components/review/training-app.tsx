@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -47,6 +47,31 @@ const emptyProgress: StoredProgress = {
 
 type WorkspaceTab = "description" | "code" | "flaws";
 
+type CodeFileEntry = {
+  key: string;
+  kind: "context" | "diff";
+  file: DiffFile;
+};
+
+type CodeLocation = {
+  filePath: string;
+  lineNumber: number;
+};
+
+type SymbolDefinition = CodeLocation & {
+  name: string;
+  kind: "definition" | "import";
+  source?: string;
+};
+
+type SymbolIndex = Map<string, SymbolDefinition[]>;
+
+type CodeIndexLine = {
+  content: string;
+  filePath: string;
+  lineNumber: number;
+};
+
 const verdictTone: Record<Verdict, "neutral" | "success" | "warning" | "danger" | "accent"> = {
   correct: "success",
   partially_correct: "warning",
@@ -63,10 +88,11 @@ export function TrainingApp() {
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [progress, setProgress] = useState<StoredProgress>(emptyProgress);
   const [currentId, setCurrentId] = useState("TS-001");
-  const [selectedFile, setSelectedFile] = useState("");
+  const [selectedFileKey, setSelectedFileKey] = useState("");
   const [activeFlawId, setActiveFlawId] = useState("");
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("description");
   const [diffMode, setDiffMode] = useState<"unified" | "split">("unified");
+  const [jumpTarget, setJumpTarget] = useState<CodeLocation | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [loadingExercise, setLoadingExercise] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -98,7 +124,8 @@ export function TrainingApp() {
       .then((response) => response.json())
       .then((data: Exercise) => {
         setExercise(data);
-        setSelectedFile(data.diff.files[0]?.newPath ?? "");
+        setSelectedFileKey(data.diff.files[0] ? diffFileKey(data.diff.files[0]) : "");
+        setJumpTarget(null);
         setActiveFlawId(data.flaws[0]?.id ?? "");
       })
       .finally(() => setLoadingExercise(false));
@@ -118,9 +145,36 @@ export function TrainingApp() {
     [currentId, index]
   );
 
-  const selectedDiffFile = useMemo(
-    () => exercise?.diff.files.find((file) => file.newPath === selectedFile) ?? exercise?.diff.files[0],
-    [exercise, selectedFile]
+  const contextCodeFiles = useMemo(
+    () => exercise?.contextFiles ?? [],
+    [exercise]
+  );
+
+  const codeFiles = useMemo<CodeFileEntry[]>(() => {
+    if (!exercise) return [];
+
+    return [
+      ...contextCodeFiles.map((file, index) => ({
+        key: contextFileKey(file, index),
+        kind: "context" as const,
+        file,
+      })),
+      ...exercise.diff.files.map((file) => ({
+        key: diffFileKey(file),
+        kind: "diff" as const,
+        file,
+      })),
+    ];
+  }, [contextCodeFiles, exercise]);
+
+  const selectedCodeFile = useMemo(
+    () => codeFiles.find((entry) => entry.key === selectedFileKey) ?? codeFiles[0],
+    [codeFiles, selectedFileKey]
+  );
+
+  const symbolIndex = useMemo(
+    () => buildSymbolIndex(codeFiles.map((entry) => entry.file)),
+    [codeFiles]
   );
 
   const completedCount = useMemo(() => {
@@ -145,6 +199,51 @@ export function TrainingApp() {
     url.searchParams.set("tab", tab);
     window.history.replaceState(null, "", url);
   }
+
+  function jumpToDefinition(definition: SymbolDefinition) {
+    const targetFile = codeFiles.find((entry) => entry.file.newPath === definition.filePath);
+    if (targetFile) setSelectedFileKey(targetFile.key);
+    setJumpTarget({
+      filePath: definition.filePath,
+      lineNumber: definition.lineNumber,
+    });
+  }
+
+  function jumpToReviewAnchor(anchor: string) {
+    const location = parseReviewAnchor(anchor);
+    if (!location) return;
+
+    const targetFile = codeFiles.find(
+      (entry) => entry.file.newPath === location.filePath || entry.file.oldPath === location.filePath
+    );
+    if (targetFile) setSelectedFileKey(targetFile.key);
+    switchTab("code");
+    setJumpTarget(location);
+  }
+
+  useEffect(() => {
+    if (!jumpTarget || selectedCodeFile?.file.newPath !== jumpTarget.filePath || activeTab !== "code") return;
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      const target = document.getElementById(codeLineId(jumpTarget.filePath, jumpTarget.lineNumber));
+      if (!target) return;
+
+      const scroller = target.closest<HTMLElement>("[data-code-scroll-container='true']");
+      if (!scroller) {
+        target.scrollIntoView({ block: "center" });
+        return;
+      }
+
+      const targetRect = target.getBoundingClientRect();
+      const scrollerRect = scroller.getBoundingClientRect();
+      const nextScrollTop =
+        scroller.scrollTop + targetRect.top - scrollerRect.top - scroller.clientHeight / 2 + targetRect.height / 2;
+
+      scroller.scrollTo({ top: Math.max(0, nextScrollTop) });
+    });
+
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [activeTab, diffMode, jumpTarget, selectedCodeFile?.file.newPath]);
 
   function updateExercise(updater: (draft: ExerciseProgress) => ExerciseProgress) {
     if (!exercise) return;
@@ -402,62 +501,65 @@ export function TrainingApp() {
 
       <div className="p-4">
         {activeTab === "description" ? (
-          <div className="mx-auto grid max-w-6xl gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
-            <Panel className="overflow-hidden">
-              <div className="border-b border-line px-4 py-3">
-                <h2 className="text-sm font-semibold">Description</h2>
-              </div>
-              <div className="space-y-5 p-4">
-                <MarkdownBlock value={exercise.prDescription} />
-                <div>
-                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                    Existing Contracts
-                  </h3>
-                  <MarkdownBlock value={exercise.existingCodeContext} />
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+              <Panel className="overflow-hidden">
+                <div className="border-b border-line px-4 py-3">
+                  <h2 className="text-sm font-semibold">Description</h2>
                 </div>
-              </div>
-            </Panel>
+                <div className="space-y-5 p-4">
+                  <MarkdownBlock value={exercise.prDescription} />
+                  <div>
+                    <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                      Existing Contracts
+                    </h3>
+                    <MarkdownBlock value={exercise.existingCodeContext} />
+                  </div>
+                </div>
+              </Panel>
 
-            <div className="space-y-4">
-              <Panel className="overflow-hidden">
-                <div className="border-b border-line px-4 py-3">
-                  <h2 className="text-sm font-semibold">Review Task</h2>
-                </div>
-                <div className="p-4">
-                  <MarkdownBlock value={exercise.learnerTask} />
-                </div>
-              </Panel>
-              <ChatPanel
-                title={currentProgress.submitted ? "PR Discussion" : "Ask About This PR"}
-                emptyText={
-                  currentProgress.submitted
-                    ? "Ask about your submitted review, missed reasoning, or better implementation shape."
-                    : "Ask about product language, domain concepts, contracts, or files in this PR."
-                }
-                placeholder={
-                  currentProgress.submitted
-                    ? "Ask a follow-up after submission..."
-                    : "Ask what a dataset run is..."
-                }
-                inputName={`${exercise.id}-description-chat-message`}
-                messages={currentProgress.chat}
-                draft={chatDraft}
-                sending={chatSending}
-                onDraftChange={setChatDraft}
-                onSend={sendChat}
-              />
-              <Panel className="overflow-hidden">
-                <div className="border-b border-line px-4 py-3">
-                  <h2 className="text-sm font-semibold">PR Shape</h2>
-                </div>
-                <div className="grid grid-cols-2 gap-3 p-4 text-sm">
-                  <Metric label="Files" value={exercise.diff.fileCount} />
-                  <Metric label="Diff lines" value={exercise.representedDiffLines} />
-                  <Metric label="Difficulty" value={exercise.difficulty} />
-                  <Metric label="Findings" value={exercise.flaws.length} />
-                </div>
-              </Panel>
+              <div className="space-y-4">
+                <Panel className="overflow-hidden">
+                  <div className="border-b border-line px-4 py-3">
+                    <h2 className="text-sm font-semibold">Review Task</h2>
+                  </div>
+                  <div className="p-4">
+                    <MarkdownBlock value={exercise.learnerTask} />
+                  </div>
+                </Panel>
+                <Panel className="overflow-hidden">
+                  <div className="border-b border-line px-4 py-3">
+                    <h2 className="text-sm font-semibold">PR Shape</h2>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 p-4 text-sm">
+                    <Metric label="Files" value={exercise.diff.fileCount} />
+                    <Metric label="Diff lines" value={exercise.representedDiffLines} />
+                    <Metric label="Difficulty" value={exercise.difficulty} />
+                    <Metric label="Findings" value={exercise.flaws.length} />
+                  </div>
+                </Panel>
+              </div>
             </div>
+
+            <ChatPanel
+              title={currentProgress.submitted ? "PR Discussion" : "Ask About This PR"}
+              emptyText={
+                currentProgress.submitted
+                  ? "Ask about your submitted review, missed reasoning, or better implementation shape."
+                  : "Ask about product language, domain concepts, contracts, or files in this PR."
+              }
+              placeholder={
+                currentProgress.submitted
+                  ? "Ask a follow-up after submission..."
+                  : "Ask what a dataset run is..."
+              }
+              inputName={`${exercise.id}-description-chat-message`}
+              messages={currentProgress.chat}
+              draft={chatDraft}
+              sending={chatSending}
+              onDraftChange={setChatDraft}
+              onSend={sendChat}
+            />
           </div>
         ) : null}
 
@@ -470,52 +572,69 @@ export function TrainingApp() {
                   <h2 className="text-sm font-semibold">Files</h2>
                 </div>
                 <div className="max-h-72 overflow-auto p-2 scrollbar-thin xl:max-h-[calc(100vh-15rem)]">
-                  {exercise.diff.files.map((file) => (
-                    <button
-                      key={file.newPath}
-                      title={file.newPath}
-                      aria-label={file.newPath}
-                      className={cn(
-                        "group flex min-h-10 w-full items-center gap-2 rounded-md px-2 text-left text-xs transition-[background-color,color,transform] duration-150 active:scale-[0.96]",
-                        selectedFile === file.newPath ? "bg-accent/10 text-accent" : "text-muted hover:bg-surface hover:text-ink"
-                      )}
-                      onClick={() => setSelectedFile(file.newPath)}
-                    >
-                      <span className="h-2 w-2 shrink-0 rounded-full bg-line group-hover:bg-muted" />
-                      <span className="min-w-0 flex-1 truncate font-mono">{compactFileName(file.newPath)}</span>
-                    </button>
-                  ))}
+                  {contextCodeFiles.length > 0 ? (
+                    <FileSection
+                      title="Existing context"
+                      files={codeFiles.filter((entry) => entry.kind === "context")}
+                      selectedFileKey={selectedFileKey}
+                      onSelect={setSelectedFileKey}
+                    />
+                  ) : null}
+                  <FileSection
+                    title="Changed files"
+                    files={codeFiles.filter((entry) => entry.kind === "diff")}
+                    selectedFileKey={selectedFileKey}
+                    onSelect={setSelectedFileKey}
+                  />
                 </div>
               </aside>
 
               <section className="min-w-0">
                 <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
                   <div className="min-w-0">
-                    <h2 className="truncate font-mono text-sm font-semibold">{selectedDiffFile?.newPath}</h2>
-                    <p className="mt-1 text-xs text-muted">Clicking a line saves it to your active finding slot.</p>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <h2 className="truncate font-mono text-sm font-semibold">{selectedCodeFile?.file.newPath}</h2>
+                      {selectedCodeFile?.kind === "context" ? <Badge tone="neutral">Context</Badge> : null}
+                    </div>
+                    <p className="mt-1 text-xs text-muted">
+                      {selectedCodeFile?.kind === "context"
+                        ? "Existing code context for review hints and contracts."
+                        : "Clicking a line saves it to your active finding slot."}
+                    </p>
                   </div>
-                  <Button variant="secondary" onClick={() => setDiffMode(diffMode === "unified" ? "split" : "unified")}>
-                    <PanelLeftClose className="h-4 w-4" />
-                    {diffMode === "unified" ? "Split" : "Unified"}
-                  </Button>
+                  {selectedCodeFile?.kind === "diff" ? (
+                    <Button variant="secondary" onClick={() => setDiffMode(diffMode === "unified" ? "split" : "unified")}>
+                      <PanelLeftClose className="h-4 w-4" />
+                      {diffMode === "unified" ? "Split" : "Unified"}
+                    </Button>
+                  ) : null}
                 </div>
 
-                <div className="max-h-[calc(100vh-16.5rem)] overflow-auto bg-[#fbfcfd] font-mono text-xs leading-5 scrollbar-thin">
-                  {loadingExercise || !selectedDiffFile ? (
+                <div
+                  data-code-scroll-container="true"
+                  className="max-h-[calc(100vh-16.5rem)] overflow-auto bg-[#fbfcfd] font-mono text-xs leading-5 scrollbar-thin"
+                >
+                  {loadingExercise || !selectedCodeFile ? (
                     <div className="flex h-64 items-center justify-center gap-2 text-muted">
                       <Loader2 className="h-4 w-4 animate-spin" />
                       Loading diff&hellip;
                     </div>
-                  ) : diffMode === "unified" ? (
+                  ) : selectedCodeFile.kind === "context" || diffMode === "unified" ? (
                     <UnifiedDiff
-                      file={selectedDiffFile}
-                      activeRefs={currentProgress.flaws[activeFlawId]?.lineRefs ?? []}
-                      onToggle={toggleLineRef}
+                      file={selectedCodeFile.file}
+                      activeRefs={selectedCodeFile.kind === "diff" ? currentProgress.flaws[activeFlawId]?.lineRefs ?? [] : []}
+                      jumpTarget={jumpTarget}
+                      symbolIndex={symbolIndex}
+                      onNavigate={jumpToDefinition}
+                      onToggle={selectedCodeFile.kind === "diff" ? toggleLineRef : noopToggleLineRef}
                     />
                   ) : (
                     <SplitDiff
-                      file={selectedDiffFile}
+                      file={selectedCodeFile.file}
                       activeRefs={currentProgress.flaws[activeFlawId]?.lineRefs ?? []}
+                      jumpTarget={jumpTarget}
+                      symbolIndex={symbolIndex}
+                      onNavigate={jumpToDefinition}
                       onToggle={toggleLineRef}
                     />
                   )}
@@ -605,6 +724,31 @@ export function TrainingApp() {
                     </div>
 
                     <div className="mt-3 space-y-2">
+                      {flawProgress.revealedHints > 0 && flaw.reviewAnchors?.length ? (
+                        <div className="rounded-md bg-surface p-2 shadow-[inset_0_0_0_1px_hsl(var(--line))]">
+                          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                            Review anchors
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {flaw.reviewAnchors.slice(0, 4).map((anchor) => (
+                              <button
+                                key={anchor}
+                                type="button"
+                                title={anchor}
+                                className="rounded-md bg-panel px-2 py-1 font-mono text-[11px] leading-4 text-muted shadow-[inset_0_0_0_1px_hsl(var(--line))] transition-[background-color,color,transform] hover:bg-accent/10 hover:text-accent active:scale-[0.96]"
+                                onClick={() => jumpToReviewAnchor(anchor)}
+                              >
+                                {formatReviewAnchor(anchor)}
+                              </button>
+                            ))}
+                            {flaw.reviewAnchors.length > 4 ? (
+                              <span className="rounded-md px-2 py-1 text-[11px] leading-4 text-muted">
+                                +{flaw.reviewAnchors.length - 4} more
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
                       {flaw.hints.slice(0, flawProgress.revealedHints).map((hint, index) => (
                         <div key={index} className="rounded-md bg-warning/10 p-2 text-xs leading-5 text-ink">
                           <span className="font-semibold tabular-nums">Hint {index + 1}: </span>
@@ -834,19 +978,97 @@ function Metric({ label, value }: { label: string; value: number }) {
   );
 }
 
-function compactFileName(filePath: string) {
-  const fileName = filePath.split("/").pop() ?? filePath;
-  const withoutExtension = fileName.replace(/\.(tsx?|jsx?|json|md|sql|prisma)$/, "");
-  return withoutExtension.length > 14 ? `${withoutExtension.slice(0, 12)}...` : withoutExtension;
+function FileSection({
+  title,
+  files,
+  selectedFileKey,
+  onSelect,
+}: {
+  title: string;
+  files: CodeFileEntry[];
+  selectedFileKey: string;
+  onSelect: (key: string) => void;
+}) {
+  if (files.length === 0) return null;
+
+  return (
+    <div className="mb-3 last:mb-0">
+      <div className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
+        {title}
+      </div>
+      <div className="space-y-1">
+        {files.map((entry) => (
+          <button
+            key={entry.key}
+            type="button"
+            title={entry.file.newPath}
+            aria-label={entry.file.newPath}
+            className={cn(
+              "group flex min-h-10 w-full items-start gap-2 rounded-md px-2 py-2 text-left text-[11px] leading-4 transition-[background-color,color,transform] duration-150 active:scale-[0.96]",
+              selectedFileKey === entry.key ? "bg-accent/10 text-accent" : "text-muted hover:bg-surface hover:text-ink"
+            )}
+            onClick={() => onSelect(entry.key)}
+          >
+            <span
+              className={cn(
+                "mt-1 h-2 w-2 shrink-0 rounded-full bg-line group-hover:bg-muted",
+                entry.kind === "context" && "bg-warning/70 group-hover:bg-warning"
+              )}
+            />
+            <span className="min-w-0 flex-1 whitespace-normal break-words font-mono">
+              {fileNameForDisplay(entry.file.newPath)}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
+
+function fileNameForDisplay(filePath: string) {
+  return filePath.split("/").pop() ?? filePath;
+}
+
+function parseReviewAnchor(anchor: string): CodeLocation | null {
+  const match = anchor.match(/^(.+?):(\d+)(?:-\d+)?$/);
+  if (!match?.[1] || !match[2]) return null;
+
+  return {
+    filePath: match[1],
+    lineNumber: Number(match[2]),
+  };
+}
+
+function formatReviewAnchor(anchor: string) {
+  const match = anchor.match(/^(.+?):(\d+(?:-\d+)?)$/);
+  if (!match?.[1] || !match[2]) return anchor;
+
+  return `${fileNameForDisplay(match[1])}:${match[2]}`;
+}
+
+function diffFileKey(file: DiffFile) {
+  return `diff:${file.newPath}`;
+}
+
+function contextFileKey(file: DiffFile, index: number) {
+  return `context:${index}:${file.newPath}`;
+}
+
+function noopToggleLineRef() {}
 
 function UnifiedDiff({
   file,
   activeRefs,
+  jumpTarget,
+  symbolIndex,
+  onNavigate,
   onToggle,
 }: {
   file: DiffFile;
   activeRefs: string[];
+  jumpTarget: CodeLocation | null;
+  symbolIndex: SymbolIndex;
+  onNavigate: (definition: SymbolDefinition) => void;
   onToggle: (file: DiffFile, line: DiffLine) => void;
 }) {
   return (
@@ -858,16 +1080,23 @@ function UnifiedDiff({
             const lineNumber = line.newLine ?? line.oldLine;
             const ref = lineNumber ? `${file.newPath}:${lineNumber}` : "";
             const selected = activeRefs.includes(ref);
+            const highlighted = Boolean(
+              lineNumber && jumpTarget?.filePath === file.newPath && jumpTarget.lineNumber === lineNumber
+            );
             return (
-              <button
+              <DiffLineRow
                 key={`${hunk.header}-${index}`}
+                id={lineNumber ? codeLineId(file.newPath, lineNumber) : undefined}
+                line={line}
+                file={file}
                 className={cn(
-                  "content-visibility-auto grid min-h-6 w-full grid-cols-[64px_64px_1fr] text-left transition-[background-color]",
+                  "grid-cols-[64px_64px_1fr]",
                   line.type === "add" && "bg-success/10",
                   line.type === "delete" && "bg-danger/10",
-                  selected && "bg-accent/15"
+                  selected && "bg-accent/15",
+                  highlighted && "bg-warning/15 ring-1 ring-inset ring-warning/50"
                 )}
-                onClick={() => onToggle(file, line)}
+                onToggle={onToggle}
               >
                 <span className="select-none border-r border-line/70 px-2 text-right text-muted tabular-nums">
                   {line.oldLine ?? ""}
@@ -879,9 +1108,15 @@ function UnifiedDiff({
                   <span className={cn(line.type === "add" && "text-success", line.type === "delete" && "text-danger")}>
                     {line.type === "add" ? "+" : line.type === "delete" ? "-" : " "}
                   </span>
-                  {line.content}
+                  <CodeLine
+                    content={line.content}
+                    filePath={file.newPath}
+                    lineNumber={lineNumber}
+                    symbolIndex={symbolIndex}
+                    onNavigate={onNavigate}
+                  />
                 </code>
-              </button>
+              </DiffLineRow>
             );
           })}
         </div>
@@ -893,10 +1128,16 @@ function UnifiedDiff({
 function SplitDiff({
   file,
   activeRefs,
+  jumpTarget,
+  symbolIndex,
+  onNavigate,
   onToggle,
 }: {
   file: DiffFile;
   activeRefs: string[];
+  jumpTarget: CodeLocation | null;
+  symbolIndex: SymbolIndex;
+  onNavigate: (definition: SymbolDefinition) => void;
   onToggle: (file: DiffFile, line: DiffLine) => void;
 }) {
   return (
@@ -908,36 +1149,402 @@ function SplitDiff({
             const lineNumber = line.newLine ?? line.oldLine;
             const ref = lineNumber ? `${file.newPath}:${lineNumber}` : "";
             const selected = activeRefs.includes(ref);
+            const highlighted = Boolean(
+              lineNumber && jumpTarget?.filePath === file.newPath && jumpTarget.lineNumber === lineNumber
+            );
             const oldContent = line.type === "add" ? "" : line.content;
             const newContent = line.type === "delete" ? "" : line.content;
             return (
-              <button
+              <DiffLineRow
                 key={`${hunk.header}-${index}`}
+                id={lineNumber ? codeLineId(file.newPath, lineNumber) : undefined}
+                line={line}
+                file={file}
                 className={cn(
-                  "content-visibility-auto grid min-h-6 w-full grid-cols-[64px_minmax(0,1fr)_64px_minmax(0,1fr)] text-left transition-[background-color]",
-                  selected && "bg-accent/15"
+                  "grid-cols-[64px_minmax(0,1fr)_64px_minmax(0,1fr)]",
+                  selected && "bg-accent/15",
+                  highlighted && "bg-warning/15 ring-1 ring-inset ring-warning/50"
                 )}
-                onClick={() => onToggle(file, line)}
+                onToggle={onToggle}
               >
                 <span className="select-none border-r border-line/70 px-2 text-right text-muted tabular-nums">
                   {line.oldLine ?? ""}
                 </span>
                 <code className={cn("whitespace-pre border-r border-line/70 px-3", line.type === "delete" && "bg-danger/10 text-danger")}>
-                  {oldContent}
+                  <CodeLine
+                    content={oldContent}
+                    filePath={file.newPath}
+                    lineNumber={line.oldLine}
+                    symbolIndex={symbolIndex}
+                    onNavigate={onNavigate}
+                  />
                 </code>
                 <span className="select-none border-r border-line/70 px-2 text-right text-muted tabular-nums">
                   {line.newLine ?? ""}
                 </span>
                 <code className={cn("whitespace-pre px-3", line.type === "add" && "bg-success/10 text-success")}>
-                  {newContent}
+                  <CodeLine
+                    content={newContent}
+                    filePath={file.newPath}
+                    lineNumber={line.newLine}
+                    symbolIndex={symbolIndex}
+                    onNavigate={onNavigate}
+                  />
                 </code>
-              </button>
+              </DiffLineRow>
             );
           })}
         </div>
       ))}
     </div>
   );
+}
+
+function DiffLineRow({
+  id,
+  file,
+  line,
+  className,
+  children,
+  onToggle,
+}: {
+  id?: string;
+  file: DiffFile;
+  line: DiffLine;
+  className?: string;
+  children: ReactNode;
+  onToggle: (file: DiffFile, line: DiffLine) => void;
+}) {
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    onToggle(file, line);
+  }
+
+  return (
+    <div
+      id={id}
+      role="button"
+      tabIndex={0}
+      className={cn(
+        "content-visibility-auto grid min-h-6 w-full text-left outline-none transition-[background-color,box-shadow] focus-visible:ring-2 focus-visible:ring-accent/35",
+        className
+      )}
+      onClick={() => onToggle(file, line)}
+      onKeyDown={handleKeyDown}
+    >
+      {children}
+    </div>
+  );
+}
+
+function CodeLine({
+  content,
+  filePath,
+  lineNumber,
+  symbolIndex,
+  onNavigate,
+}: {
+  content: string;
+  filePath: string;
+  lineNumber: number | null;
+  symbolIndex: SymbolIndex;
+  onNavigate: (definition: SymbolDefinition) => void;
+}) {
+  if (!lineNumber || symbolIndex.size === 0 || !content) return <>{content}</>;
+
+  const parts = tokenizeCodeLine(content, filePath, lineNumber, symbolIndex);
+  if (parts.length === 1 && parts[0]?.type === "text") return <>{content}</>;
+
+  return (
+    <>
+      {parts.map((part, index) => {
+        if (part.type === "text") return <span key={index}>{part.value}</span>;
+
+        return (
+          <button
+            key={`${part.value}-${index}`}
+            type="button"
+            title={navigationTitle(part.definition)}
+            className="inline appearance-none rounded-sm border-0 bg-transparent p-0 font-mono text-blue-600 underline decoration-blue-500/50 underline-offset-2 outline-none transition-[background-color,color,box-shadow] hover:bg-blue-50 hover:text-blue-700 focus-visible:ring-2 focus-visible:ring-blue-500/35"
+            onClick={(event) => handleCodeTokenClick(event, part.definition, onNavigate)}
+            onKeyDown={(event) => handleCodeTokenKeyDown(event, part.definition, onNavigate)}
+          >
+            {part.value}
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
+type CodeLinePart =
+  | {
+      type: "text";
+      value: string;
+    }
+  | {
+      type: "link";
+      value: string;
+      definition: SymbolDefinition;
+    };
+
+const callTargetPattern = /\b([A-Za-z_$][\w$]*)\s*(?=\()/g;
+const functionDefinitionPatterns = [
+  /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/,
+  /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\()/,
+  /^(?:public\s+|private\s+|protected\s+|static\s+|async\s+)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/,
+];
+const nonNavigableCallNames = new Set([
+  "catch",
+  "constructor",
+  "for",
+  "function",
+  "if",
+  "new",
+  "return",
+  "switch",
+  "throw",
+  "typeof",
+  "while",
+]);
+
+function buildSymbolIndex(files: DiffFile[]): SymbolIndex {
+  const index: SymbolIndex = new Map();
+
+  for (const file of files) {
+    const lines = getIndexableLines(file);
+    addImportBindings(index, lines);
+
+    for (const line of lines) {
+      const name = findDefinedFunctionName(line.content);
+      if (!name) continue;
+
+      addSymbol(index, {
+        name,
+        kind: "definition",
+        filePath: line.filePath,
+        lineNumber: line.lineNumber,
+      });
+    }
+  }
+
+  return index;
+}
+
+function getIndexableLines(file: DiffFile): CodeIndexLine[] {
+  return file.hunks.flatMap((hunk) =>
+    hunk.lines.flatMap((line) => {
+      const lineNumber = line.newLine ?? line.oldLine;
+      return lineNumber
+        ? [
+            {
+              content: line.content,
+              filePath: file.newPath,
+              lineNumber,
+            },
+          ]
+        : [];
+    })
+  );
+}
+
+function addImportBindings(index: SymbolIndex, lines: CodeIndexLine[]) {
+  let importBlock: CodeIndexLine[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.content.trim();
+    if (importBlock.length === 0 && !trimmed.startsWith("import ")) continue;
+
+    importBlock.push(line);
+    if (!isCompleteImportBlock(importBlock)) continue;
+
+    for (const binding of parseImportBindings(importBlock)) {
+      addSymbol(index, binding);
+    }
+    importBlock = [];
+  }
+}
+
+function isCompleteImportBlock(lines: CodeIndexLine[]) {
+  const combined = lines.map((line) => line.content.trim()).join(" ");
+  return /(?:^|\s)from\s+["'][^"']+["'];?$/.test(combined) || /^import\s+["'][^"']+["'];?$/.test(combined);
+}
+
+function parseImportBindings(lines: CodeIndexLine[]): SymbolDefinition[] {
+  const combined = lines.map((line) => line.content.trim()).join(" ");
+  const source = combined.match(/\sfrom\s+["']([^"']+)["']/)?.[1];
+  if (!source) return [];
+
+  const bindings: SymbolDefinition[] = [];
+  const namespaceMatch = combined.match(/^import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\b/);
+  const defaultMatch = combined.match(/^import\s+([A-Za-z_$][\w$]*)\s*(?:,|\s+from\b)/);
+  const namedMatch = combined.match(/\{([^}]*)\}/);
+
+  if (namespaceMatch?.[1]) {
+    bindings.push(importBinding(namespaceMatch[1], source, lines));
+  }
+
+  if (defaultMatch?.[1]) {
+    bindings.push(importBinding(defaultMatch[1], source, lines));
+  }
+
+  if (!namedMatch?.[1]) return bindings;
+
+  for (const rawSpecifier of namedMatch[1].split(",")) {
+    const specifier = rawSpecifier.trim();
+    if (!specifier) continue;
+
+    const cleaned = specifier.replace(/^type\s+/, "").trim();
+    if (!cleaned) continue;
+
+    const [imported, local = imported] = cleaned.split(/\s+as\s+/).map((part) => part.trim());
+    if (!imported || !local) continue;
+
+    bindings.push(importBinding(local, source, lines, [local, imported]));
+  }
+
+  return bindings;
+}
+
+function importBinding(name: string, source: string, lines: CodeIndexLine[], searchNames: string[] = [name]) {
+  const lineNumber =
+    lines.find((line) => searchNames.some((searchName) => hasIdentifier(line.content, searchName)))?.lineNumber ??
+    lines[0]?.lineNumber ??
+    1;
+
+  return {
+    name,
+    kind: "import" as const,
+    source,
+    filePath: lines[0]?.filePath ?? "",
+    lineNumber,
+  };
+}
+
+function addSymbol(index: SymbolIndex, definition: SymbolDefinition) {
+  const definitions = index.get(definition.name) ?? [];
+  definitions.push(definition);
+  index.set(definition.name, definitions);
+}
+
+function findDefinedFunctionName(content: string) {
+  const trimmed = content.trim();
+
+  for (const pattern of functionDefinitionPatterns) {
+    const match = trimmed.match(pattern);
+    const name = match?.[1];
+    if (name && !nonNavigableCallNames.has(name)) return name;
+  }
+
+  return null;
+}
+
+function tokenizeCodeLine(
+  content: string,
+  filePath: string,
+  lineNumber: number,
+  symbolIndex: SymbolIndex
+): CodeLinePart[] {
+  const parts: CodeLinePart[] = [];
+  const definedName = findDefinedFunctionName(content);
+  let cursor = 0;
+
+  for (const match of content.matchAll(callTargetPattern)) {
+    const name = match[1];
+    const start = match.index;
+    if (!name || start === undefined) continue;
+
+    const definition = resolveSymbolDefinition(name, filePath, lineNumber, symbolIndex);
+    if (
+      !definition ||
+      name === definedName ||
+      nonNavigableCallNames.has(name) ||
+      isPropertyAccess(content, start)
+    ) {
+      continue;
+    }
+
+    if (start > cursor) {
+      parts.push({ type: "text", value: content.slice(cursor, start) });
+    }
+    parts.push({
+      type: "link",
+      value: name,
+      definition,
+    });
+    cursor = start + name.length;
+  }
+
+  if (cursor < content.length) {
+    parts.push({ type: "text", value: content.slice(cursor) });
+  }
+
+  return parts.length > 0 ? parts : [{ type: "text", value: content }];
+}
+
+function resolveSymbolDefinition(
+  name: string,
+  filePath: string,
+  lineNumber: number,
+  symbolIndex: SymbolIndex
+) {
+  const definitions = symbolIndex.get(name);
+  if (!definitions) return null;
+
+  const candidates = definitions.filter(
+    (definition) => definition.filePath !== filePath || definition.lineNumber !== lineNumber
+  );
+  return candidates.find((definition) => definition.filePath === filePath) ?? candidates[0] ?? null;
+}
+
+function isPropertyAccess(content: string, start: number) {
+  let index = start - 1;
+  while (index >= 0 && /\s/.test(content[index] ?? "")) index -= 1;
+  return content[index] === ".";
+}
+
+function hasIdentifier(content: string, identifier: string) {
+  return new RegExp(`\\b${escapeRegExp(identifier)}\\b`).test(content);
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function navigationTitle(definition: SymbolDefinition) {
+  const target =
+    definition.kind === "import" && definition.source
+      ? `import from ${definition.source}`
+      : "definition";
+
+  return `Cmd/Ctrl-click to jump to ${target} at ${definition.filePath}:${definition.lineNumber}`;
+}
+
+function handleCodeTokenClick(
+  event: MouseEvent<HTMLButtonElement>,
+  definition: SymbolDefinition,
+  onNavigate: (definition: SymbolDefinition) => void
+) {
+  if (!event.metaKey && !event.ctrlKey) return;
+  event.preventDefault();
+  event.stopPropagation();
+  onNavigate(definition);
+}
+
+function handleCodeTokenKeyDown(
+  event: KeyboardEvent<HTMLButtonElement>,
+  definition: SymbolDefinition,
+  onNavigate: (definition: SymbolDefinition) => void
+) {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  event.stopPropagation();
+  onNavigate(definition);
+}
+
+function codeLineId(filePath: string, lineNumber: number) {
+  return `code-line-${filePath.replace(/[^a-zA-Z0-9_-]/g, "_")}-${lineNumber}`;
 }
 
 function ProgressMenu({

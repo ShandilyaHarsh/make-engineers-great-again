@@ -10801,6 +10801,9 @@
         "Follow the request from controller to use case and ask whether the HTTP handler is still doing API work or now doing worker work.",
         "Compare the new loop with the existing ParseEventRequest path that validates, builds jobData, and calls workflowQueueService.add(...).",
         "Look at the while (Date.now() - startedAt < timeoutMs) loop and the repeated readJobs/readMessages calls after the trigger has already been queued."
+      ],
+      "reviewAnchors": [
+        "apps/api/src/app/events/usecases/process-trigger-and-wait/process-trigger-and-wait.usecase.ts:50-174"
       ]
     },
     {
@@ -10816,6 +10819,11 @@
         "Do not trust the endpoint name. Ask what data source proves each response state.",
         "Compare job statuses with delivery lifecycle statuses; they are not the same contract.",
         "In resolveObservedStatus, inspect the branch that returns DELIVERED for hasAnyQueuedJob."
+      ],
+      "reviewAnchors": [
+        "apps/api/src/app/events/usecases/process-trigger-and-wait/process-trigger-and-wait.usecase.ts:176-261",
+        "apps/api/src/app/events/dtos/trigger-event-wait-response.dto.ts:52-82",
+        "apps/api/public/openapi/events.yml:12-42"
       ]
     }
   ],

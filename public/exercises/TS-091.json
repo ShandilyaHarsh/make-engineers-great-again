@@ -20499,6 +20499,12 @@
         "Follow the same original SDK event through two write regions.",
         "Compare originalEventId with the key used for replication dedupe.",
         "Date.now() in one region plus a UUID is a delivery ID, not a global event order."
+      ],
+      "reviewAnchors": [
+        "packages/shared/src/server/regions/regionalEventIdentity.ts:14-44",
+        "packages/shared/src/server/regions/processRegionalEventBatch.ts:122-177",
+        "worker/src/queues/traceReplicationQueue.ts:28-44",
+        "web/src/__tests__/server/regional-ingestion-api.servertest.ts:86-116"
       ]
     },
     {
@@ -20514,6 +20520,12 @@
         "Look at what happens after getRegionAwareTrace finds more than one region for the same trace.",
         "Find the behavior when requireConsistentRead is true and the data is mixed.",
         "A normal 200 trace response with consistency: \"mixed\" is not the same as a coherent product read model."
+      ],
+      "reviewAnchors": [
+        "packages/shared/src/server/regions/regionalTraceReadModel.ts:30-119",
+        "web/src/pages/api/public/traces/[traceId].ts:57-112",
+        "packages/shared/src/server/regions/__tests__/regionalTraceReadModel.test.ts:52-86",
+        "docs/ingestion/multi-region-ingestion.md:60-82"
       ]
     }
   ],

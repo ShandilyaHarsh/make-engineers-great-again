@@ -17092,6 +17092,12 @@
         "Ask whether \"event\" means the same thing for trace updates and product metrics.",
         "Compare grouping, retention, cardinality, and write behavior across traces and metrics.",
         "The docs say every kind has one entityId and batch-level retention; the real ingestion path has more specific invariants."
+      ],
+      "reviewAnchors": [
+        "packages/shared/src/server/events/genericEventTypes.ts:8-112",
+        "packages/shared/src/server/events/genericEventProcessor.ts:109-202",
+        "packages/shared/src/server/events/genericEventProcessor.ts:252-329",
+        "docs/ingestion/generic-event-processor.md:39-55"
       ]
     },
     {
@@ -17107,6 +17113,12 @@
         "List everything the new class does before deciding if the abstraction is healthy.",
         "Look at what happened to processEventBatch and what the worker now calls.",
         "The same file parses public API data, chooses queue grouping, uploads payloads, and writes ClickHouse tables."
+      ],
+      "reviewAnchors": [
+        "packages/shared/src/server/events/genericEventProcessor.ts:35-250",
+        "packages/shared/src/server/events/genericEventProcessor.ts:204-250",
+        "packages/shared/src/server/ingestion/processEventBatch.ts:78-95",
+        "worker/src/queues/genericEventQueue.ts:31-51"
       ]
     }
   ],

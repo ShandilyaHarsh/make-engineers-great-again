@@ -4967,6 +4967,11 @@
         "Compare this service's permission check to the existing V4 list secrets route and getSecretsRaw path.",
         "Secret permissions in Infisical are not just project-level; they include environment and secret path subject fields.",
         "The dangerous line is where ProjectPermissionActions.Read on ProjectPermissionSub.Project is treated as enough before decrypting every candidate row."
+      ],
+      "reviewAnchors": [
+        "backend/src/services/secret-search/secret-search-service.ts:128-145",
+        "backend/src/services/secret-search/secret-search-service.ts:147-166",
+        "backend/src/services/secret-search/secret-search-dal.ts:21-52"
       ]
     },
     {
@@ -4982,6 +4987,9 @@
         "Search features tend to put the user's query and matched fields into debug logs. That is dangerous here.",
         "Follow the decrypted scored object after scoreMatch.",
         "The logger call includes secretValue: scored.secretValue."
+      ],
+      "reviewAnchors": [
+        "backend/src/services/secret-search/secret-search-service.ts:181-194"
       ]
     }
   ],

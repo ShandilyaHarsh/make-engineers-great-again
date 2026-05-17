@@ -6137,6 +6137,11 @@
         "Review this like a payment or order-placement path: assume the HTTP request can be retried after a partial success.",
         "Look for a stable identity that says \"this reservation is for this cart line and this completion attempt.\"",
         "The model and migration add indexes for reads, but nothing prevents two active rows for the same cart line and inventory location."
+      ],
+      "reviewAnchors": [
+        "packages/modules/inventory/src/models/checkout-reservation.ts:10-56",
+        "packages/modules/inventory/src/migrations/Migration20260218094500.ts:4-35",
+        "packages/modules/inventory/src/services/inventory-module.ts:86-154"
       ]
     },
     {
@@ -6152,6 +6157,11 @@
         "Compare the old reserveInventoryStep contract with the new route-level call before we.run.",
         "Ask what compensates the inventory hold if the workflow returns a payment error or fails after order creation.",
         "The most dangerous line is the catch block that logs reservation failure and still runs completeCartWorkflow."
+      ],
+      "reviewAnchors": [
+        "packages/medusa/src/api/store/carts/[id]/complete/route.ts:24-76",
+        "packages/core/core-flows/src/cart/workflows/complete-cart.ts:480-606",
+        "packages/core/core-flows/src/cart/steps/attach-checkout-reservations-to-order.ts:19-53"
       ]
     }
   ],
