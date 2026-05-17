@@ -251,7 +251,6 @@ function parseDirectFlawSections(markdown) {
     const next = matches[index + 1]?.index ?? markdown.indexOf("\n## Expert Debrief", start);
     const end = next === -1 ? markdown.length : next;
     const body = markdown.slice(start, end).trim();
-    const reviewAnchors = extractReviewAnchors(body);
     return {
       id: `flaw-${match[1]}`,
       number: Number(match[1]),
@@ -268,7 +267,6 @@ function parseDirectFlawSections(markdown) {
         .filter(Boolean)
         .join("\n\n"),
       hints: extractHints(body),
-      ...(reviewAnchors.length > 0 ? { reviewAnchors } : {}),
     };
   });
 }
@@ -290,24 +288,7 @@ function parseLegacyFlaw(number, title, body) {
     expectedFix: "",
     goldenAnswer: expected,
     hints: extractNumberedList(hintsBlock),
-    ...(extractReviewAnchors(body).length > 0 ? { reviewAnchors: extractReviewAnchors(body) } : {}),
   };
-}
-
-function extractReviewAnchors(body) {
-  const rawLocation = body.match(/^- `location`:\s+(.+)$/m)?.[1];
-  if (!rawLocation) return [];
-
-  let lastPath = "";
-  return [...rawLocation.matchAll(/`([^`]+)`/g)]
-    .map((match) => match[1].trim())
-    .filter(Boolean)
-    .map((anchor) => {
-      const normalized = anchor.startsWith(":") && lastPath ? `${lastPath}${anchor}` : anchor;
-      const pathMatch = normalized.match(/^(.+?):\d+(?:-\d+)?$/);
-      if (pathMatch?.[1]) lastPath = pathMatch[1];
-      return normalized;
-    });
 }
 
 function attachSeparateHintSections(markdown, flaws) {

@@ -1225,7 +1225,7 @@ Expected answer:
 
 Hints:
 
-1. Compare the new unique index to `counterKey` in the existing limiter.
+1. Compare the new unique index to `counterKey` in the existing limiter at `internal/services/ratelimit/keys.go`.
 2. In this codebase, `Namespace` is not globally unique.
 3. The test named `NamespaceReuseAcrossWorkspaces` is actually blessing the bug.
 
@@ -1245,7 +1245,7 @@ Hints:
 
 1. Search the diff for `time.Now()` in the persistence path.
 2. The function takes `requestTime`, but what value does it actually truncate?
-3. Existing origin sync asserts request time is non-zero because replay must keep the original window.
+3. Existing origin sync in `internal/services/ratelimit/origin.go` asserts request time is non-zero because replay must keep the original window from `calculateSequence(req.Time, req.Duration)`.
 
 ## Final Expert Debrief
 

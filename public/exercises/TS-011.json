@@ -4996,15 +4996,6 @@
         "Follow the column from the migration into the TypeScript schema and then into the default trace table filters.",
         "SQL IN (...) does not match NULL.",
         "The tests create only new-style rows. They never prove compatibility with old traces."
-      ],
-      "reviewAnchors": [
-        "packages/shared/clickhouse/migrations/unclustered/0030_add_trace_status.up.sql:1-3",
-        "packages/shared/src/server/repositories/definitions.ts:119-126",
-        "packages/shared/src/server/repositories/traces.ts:608-672",
-        "packages/shared/src/server/services/traces-ui-table-service.ts:28-39",
-        "packages/shared/src/server/services/traces-ui-table-service.ts:239-252",
-        "packages/shared/src/server/services/traces-ui-table-service.ts:333-336",
-        "web/src/__tests__/server/traces-status.servertest.ts:7-206"
       ]
     },
     {
@@ -5017,15 +5008,9 @@
       "expectedFix": "",
       "goldenAnswer": "- `identify`: The migrations backfill the entire traces table inline. The Postgres migration wraps `ALTER TABLE`, full-table `UPDATE`, `SET NOT NULL`, default change, and index creation in one transaction. The ClickHouse migration runs a table-wide `ALTER UPDATE` and index materialization with synchronous mutation settings. That puts a large data rewrite on the deployment path.\n- `impact`: Deploys can block, time out, hold locks, saturate ClickHouse mutations, delay writes, or fail halfway across clustered environments. In self-hosted deployments, a schema migration that scans or rewrites all trace rows can take far longer than the app rollout budget. If it fails after application code has been deployed, the app assumes a non-null status while storage still contains nulls or a half-finished mutation.\n- `fix_direction`: Split schema change from data backfill. Add the nullable column and compatible read code first. Derive status for new writes. Register a resumable background migration that backfills by project/time partition or primary-key window with progress state, bounded batch sizes, observability, and retry. Only after the backfill is complete should a later migration add stricter defaults, materialized indexes, or non-null assumptions.",
       "hints": [
-        "Compare this migration to the existing trace Postgres-to-ClickHouse background migration pattern.",
+        "Compare this migration to the existing trace Postgres-to-ClickHouse background migration pattern in packages/shared/prisma/migrations/20241024173000_add_traces_pg_to_ch_background_migration/migration.sql and worker/src/backgroundMigrations/migrateTracesFromPostgresToClickhouse.ts.",
         "Look for full-table UPDATE or synchronous ClickHouse mutation work in the migration files.",
         "A schema migration should not be responsible for rewriting the whole traces corpus."
-      ],
-      "reviewAnchors": [
-        "packages/shared/clickhouse/migrations/unclustered/0030_add_trace_status.up.sql:5-13",
-        "packages/shared/clickhouse/migrations/clustered/0030_add_trace_status.up.sql:9-18",
-        "packages/shared/prisma/migrations/20260509090000_add_trace_status/migration.sql:1-17",
-        "packages/shared/prisma/schema.prisma:329-346"
       ]
     }
   ],

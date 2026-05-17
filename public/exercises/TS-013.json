@@ -5975,13 +5975,6 @@
         "An index is not a uniqueness constraint.",
         "Follow alias from insert, to schema cache, to collection-exists.ts.",
         ".first() in a resolver is a warning sign when the data model permits multiple matches."
-      ],
-      "reviewAnchors": [
-        "api/src/database/migrations/20260512A-add-collection-aliases.ts:4-19",
-        "api/src/services/collection-aliases.ts:48-86",
-        "api/src/services/collection-aliases.ts:126-138",
-        "api/src/middleware/collection-exists.ts:9-23",
-        "api/src/services/collection-aliases.test.ts:117-126"
       ]
     },
     {
@@ -5997,13 +5990,6 @@
         "Search the diff for CASCADE and .delete().",
         "Directus collection deletion already removes activity and revisions; adding more hard-delete metadata increases the audit gap.",
         "An alias is not just display metadata. It is an API name clients may have used."
-      ],
-      "reviewAnchors": [
-        "api/src/database/migrations/20260512A-add-collection-aliases.ts:11-15",
-        "api/src/services/collection-aliases.ts:178-188",
-        "api/src/services/collections.ts:669-676",
-        "api/src/utils/apply-diff.ts:195-226",
-        "api/src/services/collection-aliases.test.ts:150-171"
       ]
     }
   ],

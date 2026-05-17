@@ -16422,10 +16422,6 @@
         "Trace the lifecycle from trigger to job creation to delayed worker execution. When is the unsubscribe decision made?",
         "Compare Novu's real send-time preference evaluation with the new preference snapshot helper.",
         "The sharp evidence is that SendMessagePreferenceGuard returns from job.preferenceSnapshot without calling getFreshPreference."
-      ],
-      "reviewAnchors": [
-        "libs/application-generic/src/usecases/create-notification-jobs/create-notification-jobs-preference-snapshot.ts:8-32",
-        "apps/worker/src/app/workflow/usecases/send-message/send-message-preference.guard.ts:8-24"
       ]
     },
     {
@@ -16441,10 +16437,6 @@
         "A public unsubscribe link is an authorization artifact. Ask what prevents a user from editing the payload.",
         "Look for signature, expiry, scope, and rotation. The tests are as revealing as the implementation.",
         "The token service only does Buffer.from(...).toString(\"base64url\") and JSON parse."
-      ],
-      "reviewAnchors": [
-        "apps/api/src/app/subscribers/usecases/global-unsubscribe/global-unsubscribe-token.service.ts:10-42",
-        "apps/api/src/app/subscribers/usecases/global-unsubscribe/global-unsubscribe-token.service.spec.ts:10-36"
       ]
     }
   ],

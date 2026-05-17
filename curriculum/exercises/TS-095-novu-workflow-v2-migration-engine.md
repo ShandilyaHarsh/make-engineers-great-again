@@ -4143,7 +4143,7 @@ Find the point where migrated workflows are published. Is there a per-workflow e
 
 ### Hint 3
 
-Compare the existing worker's lifecycle responsibilities to the new worker. Which schedule, digest, skip, failure, and execution-detail semantics disappear?
+Compare the legacy worker lifecycle responsibilities described in the existing code context with the new `apps/worker/src/app/workflow-v2/workflow-v2.worker.ts`. Which schedule, digest, skip, failure, and execution-detail semantics disappear?
 
 ### Expected Identification
 
@@ -4169,7 +4169,7 @@ Trace replay from old notification to new job creation. Is it rebuilding analyti
 
 ### Hint 2
 
-Transaction IDs are there for idempotency. What happens when the replay code appends a suffix to avoid the existing transaction ID?
+Transaction IDs are there for idempotency in the legacy trigger path. What happens when `apps/api/src/app/workflows-v2/migration/replay-legacy-events.usecase.ts` appends a suffix to avoid the existing transaction ID?
 
 ### Hint 3
 

@@ -4964,14 +4964,9 @@
       "expectedFix": "",
       "goldenAnswer": "- Identify: The service only checks `ProjectPermissionActions.Read` on `ProjectPermissionSub.Project`. Existing secret reads check secret permissions against `ProjectPermissionSub.Secrets` with `{ environment, secretPath }`. The new DAL then fetches rows across project environments and paths, and the service decrypts/searches them without per-row `ReadValue` or `DescribeSecret` permission checks.\n- Impact: A user or identity with limited access to one environment/path can search secrets in another environment/path. Even if `viewSecretValue=false`, key names, comments, paths, environments, and whether a value matched the query can leak. With `viewSecretValue=true`, the endpoint can return secret values the actor should never be able to read.\n- Fix direction: Search should be scoped to authorized folders/environments before decryption. Either require explicit `environment` and `secretPath` and reuse `getSecretsRaw`, or build an authorized folder set by applying `hasSecretReadValueOrDescribePermission(permission, ReadValue/DescribeSecret, { environment, secretPath })` per candidate path before decrypting. `viewSecretValue=true` must require `ReadValue`; key-only results may be allowed with `DescribeSecret` only.",
       "hints": [
-        "Compare this service's permission check to the existing V4 list secrets route and getSecretsRaw path.",
+        "Compare this service's permission check to the existing V4 list secrets route in backend/src/server/routes/v4/secret-router.ts and the getSecretsRaw path in backend/src/services/secret/secret-service.ts.",
         "Secret permissions in Infisical are not just project-level; they include environment and secret path subject fields.",
         "The dangerous line is where ProjectPermissionActions.Read on ProjectPermissionSub.Project is treated as enough before decrypting every candidate row."
-      ],
-      "reviewAnchors": [
-        "backend/src/services/secret-search/secret-search-service.ts:128-145",
-        "backend/src/services/secret-search/secret-search-service.ts:147-166",
-        "backend/src/services/secret-search/secret-search-dal.ts:21-52"
       ]
     },
     {
@@ -4987,9 +4982,6 @@
         "Search features tend to put the user's query and matched fields into debug logs. That is dangerous here.",
         "Follow the decrypted scored object after scoreMatch.",
         "The logger call includes secretValue: scored.secretValue."
-      ],
-      "reviewAnchors": [
-        "backend/src/services/secret-search/secret-search-service.ts:181-194"
       ]
     }
   ],

@@ -980,7 +980,7 @@ Expected answer:
 
 Hints:
 
-1. Compare the new referential actions to the existing `parentTaskRun` and `rootTaskRun` relations.
+1. Compare the new referential actions to the existing `parentTaskRun` and `rootTaskRun` relations in `internal-packages/database/prisma/schema.prisma`.
 2. A graph for debugging old runs is history, not just cache.
 3. The test that deletes the parent is not harmless; it codifies the data-loss behavior.
 

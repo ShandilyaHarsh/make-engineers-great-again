@@ -7949,11 +7949,6 @@
         "Compare this helper to jwt, bearerAuth, and basicAuth. When do those call next()?",
         "In the tests, look for required: true plus an invalid Authorization header. What status code is expected?",
         "\"No token\" and \"bad token\" are different security events. A reviewer should not let them share the same default branch."
-      ],
-      "reviewAnchors": [
-        "src/middleware/optional-auth/index.ts:154-181",
-        "src/middleware/optional-auth/index.test.ts:171-234",
-        "src/middleware/optional-auth/index.test.ts:251-262"
       ]
     },
     {
@@ -7966,15 +7961,9 @@
       "expectedFix": "",
       "goldenAnswer": "- `identify`: The PR augments Hono's global `ContextVariableMap` with `OptionalAuthVariables`, where `authUser` is optional and nullable. That makes `c.get(\"authUser\")` and `c.var.authUser` available everywhere, including routes that never install the middleware. `optionalAuth({ required: true })` and `optionalAuth()` both return the same untyped `MiddlewareHandler`, so route handlers cannot know from the type system whether auth ran or whether a user is required. The tests even assert that a route with no middleware can read `c.var.authUser`.\n- `impact`: The framework trains users into unsafe auth assumptions. Protected handlers can compile while treating the user as maybe-present, shared helpers can read global `authUser` without declaring an auth requirement, and application authors lose the route-level proof that Hono's generics normally provide. The result is maintainability debt and subtle security bugs: a route can be moved, middleware can be removed, or a helper can be reused outside an auth chain without TypeScript complaining.\n- `fix_direction`: Do not globally add an optional user to every context. Export route-specific env types and middleware with distinct type contracts, for example `optionalAuth<TUser>(): MiddlewareHandler<{ Variables: { authUser: TUser | null; authContext: OptionalAuthContext<TUser> } }>` and `requiredAuth<TUser>(): MiddlewareHandler<{ Variables: { authUser: TUser; authContext: RequiredAuthContext<TUser> } }>` or helper factories using `createMiddleware`. Keep optional and required contexts separate, and let users opt into global augmentation only if they deliberately want it.",
       "hints": [
-        "Hono's existing type tests check that middleware variables are visible only where middleware is chained. Does this PR preserve that?",
+        "Hono's existing type tests in src/types.test.ts check that middleware variables are visible only where middleware is chained. Does this PR preserve that?",
         "Search for declare module '../..'. What does it add to every Context, even unrelated routes?",
         "Optional route context and required route context should not have the same type."
-      ],
-      "reviewAnchors": [
-        "src/middleware/optional-auth/index.ts:34-35",
-        "src/middleware/optional-auth/types.ts:47-72",
-        "src/middleware/optional-auth/types.test.ts:47-65",
-        "src/middleware/optional-auth/types.test.ts:99-110"
       ]
     }
   ],

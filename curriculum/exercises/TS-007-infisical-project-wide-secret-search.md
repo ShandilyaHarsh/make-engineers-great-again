@@ -800,7 +800,7 @@ Expected answer:
 
 Hints:
 
-1. Compare this service's permission check to the existing V4 list secrets route and `getSecretsRaw` path.
+1. Compare this service's permission check to the existing V4 list secrets route in `backend/src/server/routes/v4/secret-router.ts` and the `getSecretsRaw` path in `backend/src/services/secret/secret-service.ts`.
 2. Secret permissions in Infisical are not just project-level; they include environment and secret path subject fields.
 3. The dangerous line is where `ProjectPermissionActions.Read` on `ProjectPermissionSub.Project` is treated as enough before decrypting every candidate row.
 

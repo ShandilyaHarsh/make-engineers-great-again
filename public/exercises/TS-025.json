@@ -8737,13 +8737,8 @@
       "goldenAnswer": "- `identify`: The key lookup is scoped to `ctx.workspace.id`, but role lookup is only `inArray(table.id, roleIds)`. The permission expansion query also selects roles by ID only. A caller who can supply or replay a role ID from another workspace can attach that role to a key in the current workspace, and role-derived permissions are read without a role workspace predicate.\n- `impact`: This is a tenant boundary break in an authorization feature. A key in workspace A can receive permissions from workspace B. In systems with imported role IDs, predictable IDs, stale fixtures, or any ID disclosure through logs/audit/UI, this can grant cross-workspace capabilities. The data-plane verification path later trusts the join tables, so the bug becomes an actual permission grant, not only a dashboard display mistake.\n- `fix_direction`: Validate roles through a workspace-scoped lookup: `and(eq(roles.workspaceId, workspaceId), inArray(roles.id, roleIds))`. When expanding permissions, join through workspace-owned rows and include workspace predicates on `roles`, `roles_permissions`, and `permissions`. Prefer database constraints that encode the same invariant, such as composite uniqueness/foreign-key semantics over `(workspace_id, role_id)` and `(workspace_id, permission_id)`, so future writers cannot bypass the service-layer guard.",
       "hints": [
         "Start from the tenant boundary. The key is scoped; check whether the role and permission paths carry that same scope all the way through.",
-        "Compare the PR to Unkey's existing pattern: update-rbac.ts validates key, roles, and permissions against ctx.workspace.id before writing join rows.",
+        "Compare the PR to Unkey's existing pattern: web/apps/dashboard/lib/trpc/routers/key/rbac/update-rbac.ts validates key, roles, and permissions against ctx.workspace.id before writing join rows.",
         "In update-key-roles.ts, the role query uses only inArray(table.id, uniqueRoleIds). In resolve-effective-permissions.ts, the role expansion query filters by role ID but not by workspace."
-      ],
-      "reviewAnchors": [
-        "web/apps/dashboard/lib/trpc/routers/key/rbac/update-key-roles.ts:55-82",
-        "web/apps/dashboard/lib/trpc/routers/key/rbac/resolve-effective-permissions.ts:27-50",
-        "web/apps/dashboard/lib/trpc/routers/key/rbac/resolve-effective-permissions.ts:134-151"
       ]
     },
     {
@@ -8759,12 +8754,6 @@
         "Ask whether \"role\" means a live permission bundle or a one-time copy of permissions.",
         "Follow a permission from role creation to key verification. Does the code read the role-permission join table when the key is verified, or only when the key is changed?",
         "The test named \"does not change an old snapshot when the role object is edited later\" is a smell: it locks in stale authorization behavior without explaining that as a product contract."
-      ],
-      "reviewAnchors": [
-        "web/apps/dashboard/lib/trpc/routers/key/rbac/role-permission-snapshot.ts:23-83",
-        "web/apps/dashboard/lib/trpc/routers/key/rbac/create-key-with-roles.ts:87-96",
-        "web/apps/dashboard/lib/trpc/routers/authorization/roles/upsert.ts:176-211",
-        "web/apps/dashboard/lib/trpc/routers/key/rbac/role-permission-snapshot.test.ts:24-55"
       ]
     }
   ],

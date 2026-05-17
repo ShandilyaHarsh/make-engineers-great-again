@@ -1258,7 +1258,7 @@ Expected answer:
 
 Hints:
 
-1. Hono's existing type tests check that middleware variables are visible only where middleware is chained. Does this PR preserve that?
+1. Hono's existing type tests in `src/types.test.ts` check that middleware variables are visible only where middleware is chained. Does this PR preserve that?
 2. Search for `declare module '../..'`. What does it add to every `Context`, even unrelated routes?
 3. Optional route context and required route context should not have the same type.
 

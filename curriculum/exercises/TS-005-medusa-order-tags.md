@@ -707,7 +707,7 @@ Expected answer:
 
 Hints:
 
-1. Start from how the existing admin order update endpoint changes an order.
+1. Start from the existing admin order update path: `packages/medusa/src/api/admin/orders/[id]/route.ts` runs `updateOrderWorkflow(...)` in `packages/core/core-flows/src/order/workflows/update-order.ts`.
 2. Look for order changes, workflow steps, and events, not only for a successful database write.
 3. The key line is the route-level `orderModuleService.updateOrders(...)` call; compare it to `updateOrderWorkflow(req.scope).run(...)`.
 

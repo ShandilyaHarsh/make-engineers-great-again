@@ -7088,15 +7088,9 @@
       "expectedFix": "",
       "goldenAnswer": "- `identify`: The new service builds slots directly from raw event type/user schedules and subtracts only a simplified booking query. It does not call `AvailableSlotsService.getAvailableSlots`, `UserAvailabilityService`, or the existing v2 input/output path. That bypasses date-range construction, travel schedules, holidays, out-of-office days, connected-calendar busy times, restriction schedules, selected-slot reservations, pending confirmation blockers, team host qualification, round-robin/collective aggregation, seats, period limits, current seats, reschedule semantics, and minimum booking notice behavior.\n- `impact`: The endpoint will show slots that the normal booking flow later rejects, especially for teams, travel schedules, DST edges, holds/reservations, pending confirmation events, external calendar conflicts, and booking limits. Product pages become untrustworthy: users see \"available\" times, click one, then fail at booking. Worse, the bulk endpoint becomes a second availability engine that drifts every time the real slots service evolves.\n- `fix_direction`: Make bulk preview a batching/orchestration layer over the existing slots contract. Transform each requested event type into the same internal slots query and call `AvailableSlotsService` through the v2 slots service/output path, with bounded concurrency, shared prefetch only behind existing service boundaries, and tests comparing bulk results to single-event slots results for the same inputs.",
       "hints": [
-        "Compare the new service to the path used by the existing v2 slots endpoint.",
+        "Compare the new service to the existing v2 slots endpoint path: apps/api/v2/src/modules/slots/slots-2024-09-04/services/slots.service.ts delegates to getAvailableSlotsService().getAvailableSlots in packages/trpc/server/routers/viewer/slots/util.ts.",
         "Ask whether \"schedule availability minus accepted bookings\" is the full Cal.diy availability contract.",
         "The dangerous code is the loop that reads host.schedule?.availability ?? eventType.availability instead of delegating to AvailableSlotsService."
-      ],
-      "reviewAnchors": [
-        "apps/api/v2/src/modules/slots/slots-2024-09-04/services/bulk-availability-preview.service.ts:56-90",
-        "apps/api/v2/src/modules/slots/slots-2024-09-04/services/bulk-availability-preview.service.ts:119-186",
-        "apps/api/v2/src/modules/slots/slots-2024-09-04/slots.repository.ts:84-170",
-        "apps/api/v2/src/modules/slots/slots-2024-09-04/services/bulk-availability-preview.service.spec.ts:1-182"
       ]
     },
     {
@@ -7112,12 +7106,6 @@
         "Look at the response model before looking at the service.",
         "Check whether privacy flags on the event type affect the returned busy details.",
         "A slot preview can say \"blocked\" without saying \"Investor call with investor@example.com.\""
-      ],
-      "reviewAnchors": [
-        "apps/api/v2/src/modules/slots/slots-2024-09-04/outputs/bulk-availability-preview.output.ts:17-51",
-        "apps/api/v2/src/modules/slots/slots-2024-09-04/slots.repository.ts:171-222",
-        "apps/api/v2/src/modules/slots/slots-2024-09-04/services/bulk-availability-preview.service.ts:188-230",
-        "apps/api/v2/src/modules/slots/slots-2024-09-04/services/bulk-availability-preview.service.spec.ts:139-181"
       ]
     }
   ],

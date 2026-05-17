@@ -688,7 +688,7 @@ Expected answer:
 
 Hints:
 
-1. Compare the new merge order with the existing comment in `MergePreferences`.
+1. Compare the new merge order with the existing `MergePreferences` contract in `libs/application-generic/src/usecases/merge-preferences/merge-preferences.usecase.ts`.
 2. Follow one channel where global says `false` and workflow-specific subscriber preference says `true`.
 3. The bug is the new override preference being appended at the end of `preferencesList`.
 

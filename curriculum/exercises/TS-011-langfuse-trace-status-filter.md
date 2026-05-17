@@ -858,7 +858,7 @@ Expected answer:
 
 Hints:
 
-1. Compare this migration to the existing trace Postgres-to-ClickHouse background migration pattern.
+1. Compare this migration to the existing trace Postgres-to-ClickHouse background migration pattern in `packages/shared/prisma/migrations/20241024173000_add_traces_pg_to_ch_background_migration/migration.sql` and `worker/src/backgroundMigrations/migrateTracesFromPostgresToClickhouse.ts`.
 2. Look for full-table `UPDATE` or synchronous ClickHouse mutation work in the migration files.
 3. A schema migration should not be responsible for rewriting the whole traces corpus.
 

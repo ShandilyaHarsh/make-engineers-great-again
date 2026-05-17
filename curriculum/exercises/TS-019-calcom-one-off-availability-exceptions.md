@@ -1012,7 +1012,7 @@ Expected answer:
 
 Hints:
 
-1. Compare `parseExceptionStart` to the existing `processDateOverride`.
+1. Compare `parseExceptionStart` to the existing `processDateOverride` in `packages/features/schedules/lib/date-ranges.ts`.
 2. A `YYYY-MM-DD` string is not enough once users and servers live in different timezones.
 3. The lookup range is formatted from server dates, not the schedule's local calendar.
 

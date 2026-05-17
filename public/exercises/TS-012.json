@@ -6783,11 +6783,6 @@
         "Follow the migration after the backfill finishes. Which fields disappear from secrets_v2?",
         "Think about a rollback to the previous application binary after this migration has already run.",
         "A secrets table stores customer-critical encrypted data. Treat duplicated storage removal as a staged contract change, not one schema diff."
-      ],
-      "reviewAnchors": [
-        "backend/src/db/migrations/20260510103000_canonical_secret_versions_v2.ts:112-146",
-        "backend/src/db/migrations/20260510103000_canonical_secret_versions_v2.ts:148-193",
-        "backend/src/db/schemas/secrets-v2.ts:14-24"
       ]
     },
     {
@@ -6803,13 +6798,6 @@
         "innerJoin is a contract: rows without a matching current version do not appear.",
         "The test fixtures all start in the final state. Look for a test with currentVersionId: null.",
         "Rolling deploys mean new readers can observe rows written by old writers for a while."
-      ],
-      "reviewAnchors": [
-        "backend/src/services/secret-v2-bridge/secret-v2-bridge-dal.ts:50-111",
-        "backend/src/services/secret-v2-bridge/secret-v2-bridge-dal.ts:121-189",
-        "backend/src/services/secret-v2-bridge/secret-v2-bridge-service.ts:269-339",
-        "backend/src/services/secret-v2-bridge/secret-v2-bridge-service.ts:672-704",
-        "backend/src/services/secret-v2-bridge/secret-v2-bridge-service.test.ts:41-166"
       ]
     }
   ],

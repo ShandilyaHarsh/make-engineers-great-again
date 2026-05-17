@@ -2777,7 +2777,7 @@ Trace one permission rule through the old path and the new path. Are they using 
 If SQL and app-level filtering both interpret permissions, every policy feature now has to be implemented twice perfectly.
 
 ### Hint 3
-Performance optimizations for access control should usually compile the existing permission AST, not invent a second permission language.
+Performance optimizations for access control should usually compile the existing permission AST from `api/src/permissions/modules/process-ast/process-ast.ts`/`getCases`, not invent a second permission language in `compile-permission-sql.ts`.
 
 ### Expected Identification
 The PR adds a separate SQL permission interpreter while keeping the existing AST/case/app-filter path. `api/src/permissions/modules/sql-permission-compiler/compile-permission-sql.ts:5-29` flattens and interprets permission filters independently. `api/src/permissions/modules/process-ast/process-ast.ts:4-13` calls the original `processAst` and then runs the SQL compiler as another path. `api/src/services/items.ts:4-31` applies SQL predicates but still filters rows in application code. The docs describe both paths staying active in `docs/internals/permissions/sql-permission-compiler.md:11-15`.

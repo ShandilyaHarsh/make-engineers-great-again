@@ -5627,15 +5627,8 @@
       "goldenAnswer": "- `identify`: The mutations run under `workspaceProcedure`, but the key lookup only checks `key.id` and `deletedAtM`. The update also writes by `key.id` only. A user from workspace A can mutate metadata on a key from workspace B if they can obtain the key id. The tests even encode this as accepted behavior by updating a key from `otherWorkspace`.\n- `impact`: This is a tenant boundary break. Metadata often drives authorization context, customer plan, routing, rate-limit attributes, and support tooling. Cross-workspace mutation means one customer can alter another customer's auth context, expose or hide public metadata, poison audit logs under the wrong workspace, and create a support trail that blames the wrong tenant.\n- `fix_direction`: Treat workspace ownership as part of the mutation contract. Fetch the key through the current workspace, for example `and(eq(keys.id, input.keyId), eq(keys.workspaceId, ctx.workspace.id), isNull(keys.deletedAtM))`, or through the key auth/API relationship owned by the workspace. Update with the same workspace guard or with the scoped key returned by that lookup, return `NOT_FOUND` for cross-workspace ids, and replace the cross-workspace acceptance tests with negative boundary tests.",
       "hints": [
         "workspaceProcedure authenticates the caller's workspace; it does not automatically scope arbitrary rows.",
-        "Compare the key lookup predicate with the workspace-scoped key update patterns described in the existing code context.",
+        "Compare the key lookup predicate with the workspace-scoped dashboard update path in web/apps/dashboard/lib/trpc/routers/key/updateMetadata.ts, which should resolve the key through ctx.workspace.id.",
         "The test that uses otherWorkspace is not harmless fixture setup. It documents the broken boundary."
-      ],
-      "reviewAnchors": [
-        "web/apps/dashboard/lib/trpc/routers/key/updateMetadata.ts:14-45",
-        "web/apps/dashboard/lib/trpc/routers/key/updateMetadata.ts:57-69",
-        "web/apps/dashboard/lib/trpc/routers/key/updatePublicMetadata.ts:18-47",
-        "web/apps/dashboard/lib/trpc/routers/key/updatePublicMetadata.ts:61-71",
-        "web/apps/dashboard/test/key-metadata.test.ts:218-282"
       ]
     },
     {
@@ -5651,12 +5644,6 @@
         "The real verifier cache is keyed by key hash, while the new event only carries keyId.",
         "Reading the database after the mutation does not prove the edge verifier has dropped its cached value.",
         "Any metadata used in authorization context is data-plane state, even if the edit happens in the dashboard."
-      ],
-      "reviewAnchors": [
-        "web/apps/dashboard/lib/trpc/routers/key/updateMetadata.ts:71-101",
-        "web/apps/dashboard/lib/trpc/routers/key/updatePublicMetadata.ts:73-103",
-        "web/apps/dashboard/lib/trpc/routers/key/metadataAudit.ts:49-84",
-        "web/apps/dashboard/test/key-metadata.test.ts:190-216"
       ]
     }
   ],

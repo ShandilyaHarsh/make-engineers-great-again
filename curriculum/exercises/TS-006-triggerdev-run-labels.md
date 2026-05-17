@@ -710,7 +710,7 @@ Expected answer:
 
 Hints:
 
-1. Compare label validation with existing run tag validation.
+1. Compare label validation with existing run tag validation: `MAX_TAGS_PER_RUN` in `apps/webapp/app/models/taskRunTag.server.ts` and `apps/webapp/app/runEngine/validators/triggerTaskValidator.ts`.
 2. Think like an ingestion reviewer: every label is replicated, indexed, queried, and returned.
 3. The validator says "not empty" but never says "how many" or "how large."
 

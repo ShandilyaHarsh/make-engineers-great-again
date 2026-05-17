@@ -4335,12 +4335,6 @@
         "Compare this operation to deleteByIDOperation, not just to a raw database update.",
         "Look for executeAccess, beforeDelete, afterDelete, and buildAfterOperation.",
         "The test creates hooks but never verifies that soft delete or restore invokes them."
-      ],
-      "reviewAnchors": [
-        "packages/payload/src/collections/operations/softDeleteByID.ts:31-119",
-        "packages/payload/src/collections/operations/restoreSoftDeletedByID.ts:30-112",
-        "packages/payload/src/collections/operations/local/softDelete.ts:29-78",
-        "test/soft-delete/int.spec.ts:24-37"
       ]
     },
     {
@@ -4356,11 +4350,6 @@
         "Look at database indexes, not only the operation code.",
         "Ask whether a deleted document should still reserve its slug forever.",
         "The missing test is: delete slug=a, create another slug=a, then restore the first document."
-      ],
-      "reviewAnchors": [
-        "packages/db-postgres/src/schema/buildCollectionTable.ts:133-210",
-        "packages/payload/src/collections/operations/restoreSoftDeletedByID.ts:52-82",
-        "test/soft-delete/int.spec.ts:81-93"
       ]
     }
   ],

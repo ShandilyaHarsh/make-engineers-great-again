@@ -9258,12 +9258,6 @@
         "Look at the OR filters in the repository. Which branch still works after a host has been removed from the team?",
         "Compare booking.userId to Membership.accepted. One is historical booking state; the other is current authorization state.",
         "The tests that feel \"convenient\" for continuity are a clue: offboarding should change access immediately."
-      ],
-      "reviewAnchors": [
-        "apps/api/v2/src/platform/bookings/2024-08-13/repositories/team-booking-management.repository.ts:83-116",
-        "apps/api/v2/src/platform/bookings/2024-08-13/repositories/team-booking-management.repository.ts:146-189",
-        "apps/api/v2/src/platform/bookings/2024-08-13/services/team-booking-management.service.ts:204-223",
-        "apps/api/v2/src/platform/bookings/2024-08-13/controllers/e2e/team-bookings.e2e-spec.ts:157-225"
       ]
     },
     {
@@ -9279,11 +9273,6 @@
         "Trace the manager reschedule method from top to bottom. Where is the first database write?",
         "A 403 response is not enough if the request already changed attendees or sent email.",
         "Strong reviewers look for the order: load minimal data, authorize, then mutate and notify."
-      ],
-      "reviewAnchors": [
-        "apps/api/v2/src/platform/bookings/2024-08-13/services/team-booking-management.service.ts:95-154",
-        "apps/api/v2/src/platform/bookings/2024-08-13/repositories/team-booking-management.repository.ts:270-308",
-        "apps/api/v2/src/platform/bookings/2024-08-13/controllers/e2e/team-bookings.e2e-spec.ts:237-270"
       ]
     }
   ],

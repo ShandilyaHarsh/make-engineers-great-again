@@ -2794,7 +2794,7 @@ Lower relation predicates into the relational SQL builder. For many relations, u
 Compare the type tests with the runtime tests. Does the type say a relation is non-empty while runtime preserves parents with no matching children?
 
 ### Hint 2
-A type helper that narrows a relation to `[T, ...T[]]` is making a contract about the first element existing.
+A type helper in `relations.ts` that narrows a relation to `[T, ...T[]]` is making a contract about the first element existing.
 
 ### Hint 3
 The product bug is not just "types are a little optimistic." Application code will skip empty checks because the library told it those checks are unnecessary.

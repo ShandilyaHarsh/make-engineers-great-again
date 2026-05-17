@@ -901,7 +901,7 @@ Expected answer:
 Hints:
 
 1. `workspaceProcedure` authenticates the caller's workspace; it does not automatically scope arbitrary rows.
-2. Compare the key lookup predicate with the workspace-scoped key update patterns described in the existing code context.
+2. Compare the key lookup predicate with the workspace-scoped dashboard update path in `web/apps/dashboard/lib/trpc/routers/key/updateMetadata.ts`, which should resolve the key through `ctx.workspace.id`.
 3. The test that uses `otherWorkspace` is not harmless fixture setup. It documents the broken boundary.
 
 ### Flaw 2: Control-Plane Metadata Updates Do Not Invalidate The Verification Cache

@@ -10799,11 +10799,8 @@
       "goldenAnswer": "- `identify`: The new endpoint triggers the workflow and then keeps the API request open while polling jobs/messages until delivery, failure, or timeout. This moves workflow delivery waiting into the synchronous API path even though Novu's architecture treats trigger as validate/enqueue/acknowledge and delivery as worker-owned asynchronous work.\n- `impact`: Provider latency, worker backlog, digest/delay steps, retry backoff, and queue stalls now consume API worker capacity. Client retries after a 408 or network timeout can amplify duplicate work unless idempotency is perfect. A popular customer using `trigger/wait` can tie up request workers and database reads, turning normal downstream slowness into API saturation. It also creates unclear ownership for cancellation and partial success because the API has already accepted the trigger but is still pretending to complete delivery.\n- `fix_direction`: Keep the trigger endpoint as an acceptance contract. Return `transactionId`, `requestId`, and a workflow-run/status URL immediately. Add a separate status polling endpoint or webhook/SSE subscription backed by workflow-run state. If a bounded wait mode is required, only wait for durable acceptance/queue insertion with a very small timeout, require `transactionId`, and make SDK retries idempotent against the same workflow-run record.",
       "hints": [
         "Follow the request from controller to use case and ask whether the HTTP handler is still doing API work or now doing worker work.",
-        "Compare the new loop with the existing ParseEventRequest path that validates, builds jobData, and calls workflowQueueService.add(...).",
+        "Compare the new loop with the existing ParseEventRequest path in apps/api/src/app/events/usecases/parse-event-request/parse-event-request.usecase.ts, which validates, builds jobData, and calls workflowQueueService.add(...).",
         "Look at the while (Date.now() - startedAt < timeoutMs) loop and the repeated readJobs/readMessages calls after the trigger has already been queued."
-      ],
-      "reviewAnchors": [
-        "apps/api/src/app/events/usecases/process-trigger-and-wait/process-trigger-and-wait.usecase.ts:50-174"
       ]
     },
     {
@@ -10819,11 +10816,6 @@
         "Do not trust the endpoint name. Ask what data source proves each response state.",
         "Compare job statuses with delivery lifecycle statuses; they are not the same contract.",
         "In resolveObservedStatus, inspect the branch that returns DELIVERED for hasAnyQueuedJob."
-      ],
-      "reviewAnchors": [
-        "apps/api/src/app/events/usecases/process-trigger-and-wait/process-trigger-and-wait.usecase.ts:176-261",
-        "apps/api/src/app/events/dtos/trigger-event-wait-response.dto.ts:52-82",
-        "apps/api/public/openapi/events.yml:12-42"
       ]
     }
   ],

@@ -1114,7 +1114,7 @@ Expected answer:
 
 Hints:
 
-1. Compare the new service to the path used by the existing v2 slots endpoint.
+1. Compare the new service to the existing v2 slots endpoint path: `apps/api/v2/src/modules/slots/slots-2024-09-04/services/slots.service.ts` delegates to `getAvailableSlotsService().getAvailableSlots` in `packages/trpc/server/routers/viewer/slots/util.ts`.
 2. Ask whether "schedule availability minus accepted bookings" is the full Cal.diy availability contract.
 3. The dangerous code is the loop that reads `host.schedule?.availability ?? eventType.availability` instead of delegating to `AvailableSlotsService`.
 

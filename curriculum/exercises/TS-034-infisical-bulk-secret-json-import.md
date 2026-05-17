@@ -1693,7 +1693,7 @@ Hints:
 
 Hints:
 
-1. Find which service the existing `/batch` secret routes call before they write anything.
+1. Find which service the existing `/batch` secret routes call before they write anything: `backend/src/server/routes/v4/secret-router.ts` calls `createManySecretsRaw(...)` and `updateManySecretsRaw(...)` in `backend/src/services/secret/secret-service.ts`.
 2. Search the new service for approval policy or approval request dependencies.
 3. Ask what happens when a user imports into a prod path that already has a secret approval policy.
 

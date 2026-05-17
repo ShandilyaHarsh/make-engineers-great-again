@@ -6147,12 +6147,6 @@
         "Type names and runtime guarantees are separate contracts.",
         "Follow what happens after the second item throws in the server loop.",
         "The test that says partial results happen in atomic mode is locking in the bug."
-      ],
-      "reviewAnchors": [
-        "packages/client/src/links/internalBatchLink.ts:20-61",
-        "packages/server/src/unstable-core-do-not-import/http/internalBatch.ts:58-65",
-        "packages/server/src/unstable-core-do-not-import/http/internalBatch.ts:127-205",
-        "packages/tests/server/internalBatchLink.test.ts:160-207"
       ]
     },
     {
@@ -6166,14 +6160,8 @@
       "goldenAnswer": "- `identify`: The new link batches all operations through one loader regardless of procedure type, so queries and mutations share one POST body. That bypasses tRPC's existing separation between query batches and mutation batches, plus the server's existing rejection of mixed procedure types. The retry test demonstrates duplicate side effects: a network error after the request causes the whole batch to run again and writes the audit mutation twice.\n- `impact`: Queries and mutations have different transport expectations. Queries are safe to retry and cache; mutations are side effects and need idempotency or deliberate caller control. Mixing them in a single internal batch makes retry behavior dangerous: admin actions such as invite, disable account, reset token, or write audit note can run twice while the client thinks it recovered from a network blip. Query results inside the same batch can also observe mutation ordering that is not part of the normal tRPC contract.\n- `fix_direction`: Preserve the procedure-type boundary. Keep query and mutation loaders separate, reject mixed procedure types at the internal endpoint too, and do not compose mutating batches with automatic retry unless every mutation has an idempotency key. If an admin workflow needs ordered multi-step mutation semantics, expose a domain-specific procedure such as `admin.account.updateFlagWithAudit` rather than inventing a generic mixed batch transport.",
       "hints": [
         "Compare this link to httpBatchLink, which has separate loaders for query and mutation.",
-        "Search the server parser for the existing mixed procedure type rejection.",
+        "Search the server parser for the existing mixed procedure type rejection in packages/server/src/unstable-core-do-not-import/http/contentType.ts.",
         "The retry test's duplicated audit entry is not a harmless assertion. It is the production failure mode."
-      ],
-      "reviewAnchors": [
-        "packages/client/src/links/internalBatchLink.ts:87-128",
-        "packages/server/src/unstable-core-do-not-import/http/internalBatch.ts:107-125",
-        "packages/tests/server/internalBatchLink.test.ts:136-158",
-        "packages/tests/server/internalBatchLink.test.ts:220-291"
       ]
     }
   ],

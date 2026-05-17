@@ -209,18 +209,6 @@ export function TrainingApp() {
     });
   }
 
-  function jumpToReviewAnchor(anchor: string) {
-    const location = parseReviewAnchor(anchor);
-    if (!location) return;
-
-    const targetFile = codeFiles.find(
-      (entry) => entry.file.newPath === location.filePath || entry.file.oldPath === location.filePath
-    );
-    if (targetFile) setSelectedFileKey(targetFile.key);
-    switchTab("code");
-    setJumpTarget(location);
-  }
-
   useEffect(() => {
     if (!jumpTarget || selectedCodeFile?.file.newPath !== jumpTarget.filePath || activeTab !== "code") return;
 
@@ -724,31 +712,6 @@ export function TrainingApp() {
                     </div>
 
                     <div className="mt-3 space-y-2">
-                      {flawProgress.revealedHints > 0 && flaw.reviewAnchors?.length ? (
-                        <div className="rounded-md bg-surface p-2 shadow-[inset_0_0_0_1px_hsl(var(--line))]">
-                          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                            Review anchors
-                          </div>
-                          <div className="flex flex-wrap gap-1.5">
-                            {flaw.reviewAnchors.slice(0, 4).map((anchor) => (
-                              <button
-                                key={anchor}
-                                type="button"
-                                title={anchor}
-                                className="rounded-md bg-panel px-2 py-1 font-mono text-[11px] leading-4 text-muted shadow-[inset_0_0_0_1px_hsl(var(--line))] transition-[background-color,color,transform] hover:bg-accent/10 hover:text-accent active:scale-[0.96]"
-                                onClick={() => jumpToReviewAnchor(anchor)}
-                              >
-                                {formatReviewAnchor(anchor)}
-                              </button>
-                            ))}
-                            {flaw.reviewAnchors.length > 4 ? (
-                              <span className="rounded-md px-2 py-1 text-[11px] leading-4 text-muted">
-                                +{flaw.reviewAnchors.length - 4} more
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-                      ) : null}
                       {flaw.hints.slice(0, flawProgress.revealedHints).map((hint, index) => (
                         <div key={index} className="rounded-md bg-warning/10 p-2 text-xs leading-5 text-ink">
                           <span className="font-semibold tabular-nums">Hint {index + 1}: </span>
@@ -1027,23 +990,6 @@ function FileSection({
 
 function fileNameForDisplay(filePath: string) {
   return filePath.split("/").pop() ?? filePath;
-}
-
-function parseReviewAnchor(anchor: string): CodeLocation | null {
-  const match = anchor.match(/^(.+?):(\d+)(?:-\d+)?$/);
-  if (!match?.[1] || !match[2]) return null;
-
-  return {
-    filePath: match[1],
-    lineNumber: Number(match[2]),
-  };
-}
-
-function formatReviewAnchor(anchor: string) {
-  const match = anchor.match(/^(.+?):(\d+(?:-\d+)?)$/);
-  if (!match?.[1] || !match[2]) return anchor;
-
-  return `${fileNameForDisplay(match[1])}:${match[2]}`;
 }
 
 function diffFileKey(file: DiffFile) {

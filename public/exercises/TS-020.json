@@ -7509,14 +7509,6 @@
         "Look for places that hard-code isRequired: true.",
         "The test that expects toBeNull() also expects the type to be string.",
         "Generated client types are a product contract, not just build output."
-      ],
-      "reviewAnchors": [
-        "packages/dmmf/src/computed-fields.ts:15-26",
-        "packages/dmmf/src/computed-fields.ts:39-47",
-        "packages/client-common/src/runtimeDataModel.ts:91-100",
-        "packages/client-generator-ts/src/TSClient/ComputedFields.ts:15-39",
-        "packages/client/tests/functional/computed-fields/tests.ts:63-78",
-        "packages/client/tests/functional/computed-fields/tests.ts:107-122"
       ]
     },
     {
@@ -7532,14 +7524,6 @@
         "Search for a protocol version, capability flag, or engine feature check in the diff.",
         "The real client extension path computes fields after the engine returns data.",
         "A single PostgreSQL functional test does not prove compatibility across Prisma's engine surfaces."
-      ],
-      "reviewAnchors": [
-        "packages/client/src/runtime/core/jsonProtocol/serializeJsonQuery.ts:134-139",
-        "packages/client/src/runtime/core/jsonProtocol/serializeJsonQuery.ts:250-254",
-        "packages/client/src/runtime/core/jsonProtocol/serializeJsonQuery.test.ts:1462-1651",
-        "packages/client-engine-runtime/src/json-protocol.ts:18-44",
-        "packages/client/tests/functional/computed-fields/_matrix.ts:1-10",
-        "packages/client/tests/functional/computed-fields/tests.ts:34-61"
       ]
     }
   ],

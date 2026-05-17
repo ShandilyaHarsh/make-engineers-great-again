@@ -16477,7 +16477,7 @@
       "hints": [
         "Look at toSecretSearchResult, the route response schema, and the audit event together.",
         "Ask whether a search page, API gateway log, support replay, analytics pipeline, or audit table should ever receive plaintext secret values.",
-        "Design the feature so search reveals safe metadata first and requires the existing read-value path to reveal the actual secret."
+        "Design the feature so search reveals safe metadata first and requires the existing read-value path: conditionallyHideSecretValue in backend/src/services/secret/secret-fns.ts plus permission checks in backend/src/services/secret/secret-service.ts."
       ]
     }
   ],

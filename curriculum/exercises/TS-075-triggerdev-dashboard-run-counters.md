@@ -2421,7 +2421,7 @@ The repository performs many `taskRun.count` calls and a `taskRun.groupBy` for e
 Hints:
 
 1. Count how many `TaskRun` aggregate queries happen before the dashboard can return.
-2. Compare this path with `ClickHouseEnvironmentMetricsRepository` and the existing deferred metric promises.
+2. Compare this path with `ClickHouseEnvironmentMetricsRepository` in `apps/webapp/app/services/environmentMetricsRepository.server.ts` and the existing deferred metric promises in `TaskListPresenter`.
 3. Ask what happens when every dashboard tab polls or reloads while a customer has millions of runs in the selected window.
 
 ### Flaw 2: Counters include deleted projects and archived environments, and the main dashboard omits the current project/environment scope

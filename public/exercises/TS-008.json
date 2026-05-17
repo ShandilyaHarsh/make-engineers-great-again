@@ -3999,14 +3999,9 @@
       "expectedFix": "",
       "goldenAnswer": "- `identify`: The PR applies `subscriberChannelOverrides` after all subscriber preferences in `MergePreferences`. Because the merge is last-writer-wins, a subscriber-global channel default now overrides an explicit subscriber-workflow preference. The new e2e test even locks in that behavior: a workflow-specific `email: true` is changed to `false` after the global channel override is applied.\n- `impact`: Users can no longer reliably opt into or out of a channel for a specific workflow. A subscriber who disables SMS globally but enables SMS for `security-alerts` may stop receiving that critical workflow. Conversely, a global enable can revive a channel that was intentionally disabled for a noisy workflow. Support will see preferences that look correctly saved but are ignored during delivery because the read model applies the wrong precedence.\n- `fix_direction`: Define and preserve a clear precedence model. Subscriber-global channel defaults should provide fallback values only when no workflow-specific subscriber preference exists for that channel. Explicit subscriber-workflow preferences should win over subscriber-global defaults, unless the workflow is read-only/critical or a documented resource-level override applies. Add tests for global default plus workflow opt-in and workflow opt-out cases.",
       "hints": [
-        "Compare the new merge order with the existing comment in MergePreferences.",
+        "Compare the new merge order with the existing MergePreferences contract in libs/application-generic/src/usecases/merge-preferences/merge-preferences.usecase.ts.",
         "Follow one channel where global says false and workflow-specific subscriber preference says true.",
         "The bug is the new override preference being appended at the end of preferencesList."
-      ],
-      "reviewAnchors": [
-        "libs/application-generic/src/usecases/merge-preferences/merge-preferences.usecase.ts:45-85",
-        "apps/api/src/app/subscribers-v2/usecases/update-subscriber-channel-overrides/update-subscriber-channel-overrides.usecase.ts:38-151",
-        "apps/api/src/app/subscribers-v2/e2e/channel-preference-overrides.e2e.ts:5-43"
       ]
     },
     {
@@ -4022,11 +4017,6 @@
         "A response version is only useful if the next write proves which version it edited.",
         "Look at the update filter, not only the response DTO.",
         "The missing test is two clients reading the same version and saving different channel changes."
-      ],
-      "reviewAnchors": [
-        "apps/api/src/app/subscribers-v2/dtos/channel-preference-overrides.dto.ts:45-70",
-        "apps/api/src/app/subscribers-v2/usecases/update-subscriber-channel-overrides/update-subscriber-channel-overrides.usecase.ts:38-65",
-        "apps/api/src/app/subscribers-v2/e2e/channel-preference-overrides.e2e.ts:45-72"
       ]
     }
   ],

@@ -4943,7 +4943,7 @@ Ship a staged migration: backfill from the existing task event repositories, exe
 
 ### Hint 1
 
-Open the route first. What does it do when the new table has no rows for an existing run?
+Open `apps/webapp/app/routes/resources/runs.$runId.timeline.ts` first. What does it do when the new table has no rows for an existing run?
 
 ### Hint 2
 

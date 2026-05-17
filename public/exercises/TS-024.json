@@ -7014,11 +7014,6 @@
         "Ask what a public key is allowed to do before this PR, not only whether it is scoped to a project.",
         "Search for the route configuration that decides which access levels can call the trace endpoint.",
         "The dangerous combination is allowedAccessLevels: [\"project\", \"scores\"] plus field handling that still permits io and observations."
-      ],
-      "reviewAnchors": [
-        "web/src/pages/api/public/traces/[traceId].ts:37-50",
-        "web/src/features/public-api/server/public-key-trace-lookup.ts:24-64",
-        "web/src/__tests__/server/traces-public-key-api.servertest.ts:86-138"
       ]
     },
     {
@@ -7034,10 +7029,6 @@
         "The route change changes the risk level of the Bearer key lookup.",
         "Look at what findDbKeyOrThrow checks after fetching project and organization.",
         "It checks that projectId exists, but not that the project, key, and org are still active for a read."
-      ],
-      "reviewAnchors": [
-        "web/src/features/public-api/server/apiAuth.ts:188-239",
-        "web/src/features/public-api/server/apiAuth.ts:284-313"
       ]
     }
   ],

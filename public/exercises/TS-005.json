@@ -4084,12 +4084,6 @@
         "Ask whether the product is storing a label or creating a reusable operational taxonomy.",
         "Compare a JSON string list with the questions support and operations will ask later: who, when, why, rename, delete, report.",
         "The suspicious places are the new tags order column and the helper that only trims strings before saving them."
-      ],
-      "reviewAnchors": [
-        "packages/modules/order/src/models/order.ts:19-83",
-        "packages/modules/order/src/types/order.ts:8-31",
-        "packages/modules/order/src/migrations/Migration20260501123000.ts:4-32",
-        "packages/medusa/src/api/admin/orders/[id]/tags/utils.ts:1-113"
       ]
     },
     {
@@ -4102,13 +4096,9 @@
       "expectedFix": "",
       "goldenAnswer": "- `identify`: The new tag endpoints read and write through `orderModuleService.updateOrders` directly from the HTTP route. They do not run a workflow step, do not use `updateOrderWorkflow`, do not register an order change with `created_by`/`confirmed_by`, do not emit `OrderWorkflowEvents.UPDATED` after workflow success, and do not get workflow compensation semantics. The tests only assert the response shape, not audit records, events, or subscriber-visible behavior.\n- `impact`: Admin views show the changed tags, but systems that depend on order changes or order-updated events can miss the transition. Audit trails are incomplete, retries can partially update metadata without a domain event, cache/search/indexing subscribers may stay stale, and future order invariants can be bypassed because the route became its own mini domain service.\n- `fix_direction`: Put tag application/removal behind an order-tag workflow or extend the order update workflow with an explicit tag step. The workflow should validate the order, perform assignment changes through the tag service, register an order change/audit entry with actor context, emit a stable event such as `order.tags_updated` or `OrderWorkflowEvents.UPDATED`, and return the re-queried order.",
       "hints": [
-        "Start from how the existing admin order update endpoint changes an order.",
+        "Start from the existing admin order update path: packages/medusa/src/api/admin/orders/[id]/route.ts runs updateOrderWorkflow(...) in packages/core/core-flows/src/order/workflows/update-order.ts.",
         "Look for order changes, workflow steps, and events, not only for a successful database write.",
         "The key line is the route-level orderModuleService.updateOrders(...) call; compare it to updateOrderWorkflow(req.scope).run(...)."
-      ],
-      "reviewAnchors": [
-        "packages/medusa/src/api/admin/orders/[id]/tags/route.ts:39-154",
-        "integration-tests/http/__tests__/order/admin/order-tags.spec.ts:23-96"
       ]
     }
   ],

@@ -12310,11 +12310,6 @@
         "Compare the old processEventBatch first phase with the new API handler before it calls queue.add.",
         "Ask what shape the worker queue is now allowed to contain.",
         "The worker throws after finding invalid events, but the API has already committed the chunk to Redis."
-      ],
-      "reviewAnchors": [
-        "web/src/pages/api/public/ingestion/high-volume.ts:102-181",
-        "packages/shared/src/server/ingestion/processHighVolumeIngestionBatch.ts:18-65",
-        "worker/src/queues/highVolumeIngestionQueue.ts:14-44"
       ]
     },
     {
@@ -12330,11 +12325,6 @@
         "Look at how aggregateBatchResult reports validation failures in the standard endpoint.",
         "Find what the new route returns for an event with timestamp: \"not-a-date\".",
         "A queue write is not the same product contract as an accepted ingestion event."
-      ],
-      "reviewAnchors": [
-        "web/src/pages/api/public/ingestion/high-volume.ts:183-197",
-        "web/src/__tests__/server/high-volume-ingestion-api.servertest.ts:51-67",
-        "fern/apis/server/definition/ingestion.yml:34-41"
       ]
     }
   ],

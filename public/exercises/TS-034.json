@@ -11017,7 +11017,7 @@
       "expectedFix": "",
       "goldenAnswer": "The PR adds a useful JSON import feature, but it makes two dangerous review-level mistakes. First, duplicate import targets are silently collapsed by last-write-wins `Map` behavior, so an import file can overwrite a secret value before the operator sees the plan. Second, the import commits directly through low-level secret bridge services instead of Infisical’s approval-aware raw secret service, so protected prod paths can be changed without approval requests. The fix is to make duplicate handling explicit and to route all import commits through the same secret approval boundary as existing bulk create/update APIs.",
       "hints": [
-        "Find which service the existing /batch secret routes call before they write anything.",
+        "Find which service the existing /batch secret routes call before they write anything: backend/src/server/routes/v4/secret-router.ts calls createManySecretsRaw(...) and updateManySecretsRaw(...) in backend/src/services/secret/secret-service.ts.",
         "Search the new service for approval policy or approval request dependencies.",
         "Ask what happens when a user imports into a prod path that already has a secret approval policy."
       ]

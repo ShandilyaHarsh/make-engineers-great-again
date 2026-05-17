@@ -7728,12 +7728,6 @@
         "Look for the files that export new secret-reading functions.",
         "Ask what happens when a caller reaches the service without going through secret-router.ts.",
         "A permission check is only durable if the API that performs the sensitive operation cannot be called without it."
-      ],
-      "reviewAnchors": [
-        "backend/src/server/routes/v4/secret-router.ts:179-231",
-        "backend/src/server/routes/v3/deprecated-secret-router.ts:293-344",
-        "backend/src/services/secret/secret-service.ts:1403-1519",
-        "backend/src/services/secret/secret-service.ts:3729-3732"
       ]
     },
     {
@@ -7749,13 +7743,6 @@
         "Search for contains: true.",
         "Compare a path segment model with string-prefix matching.",
         "Any wildcard accepted in token creation becomes part of the security contract customers rely on."
-      ],
-      "reviewAnchors": [
-        "backend/src/db/migrations/20260516092100_add_service_token_resource_scopes.ts:42-55",
-        "backend/src/services/service-token/service-token-scope-types.ts:15-21",
-        "backend/src/services/service-token/service-token-scope-types.ts:80-91",
-        "backend/src/services/service-token/service-token-scope-service.ts:27-63",
-        "backend/e2e-test/routes/v2/service-token-resource-scopes.spec.ts:234-272"
       ]
     }
   ],

@@ -7458,11 +7458,6 @@
         "Start with the ownership boundary. A run is not just an organization resource; it is tied to a project and a runtime environment.",
         "Compare this PR to RunPresenter, findEnvironmentBySlug, LogsListPresenter, and LogDetailPresenter.",
         "The key smell is in getRunLogAccessContext: friendlyId plus organization membership is the only authorization condition. The presenter then drops project_id and environment_id in ClickHouse."
-      ],
-      "reviewAnchors": [
-        "apps/webapp/app/services/runLogs/runLogAccess.server.ts:23-77",
-        "apps/webapp/app/presenters/v3/OrgRunLogsPresenter.server.ts:68-83",
-        "apps/webapp/app/presenters/v3/OrgRunLogsPresenter.server.ts:224-236"
       ]
     },
     {
@@ -7478,14 +7473,6 @@
         "Ask whether this code is using a display-safe environment-variable API or an execution API.",
         "Trace the data path from resolveVariablesForEnvironment() to ClickHouse and then to the API response.",
         "The logger change is worse than the drawer option: it adds variables: env.environment to every log event before the data reaches storage."
-      ],
-      "reviewAnchors": [
-        "apps/webapp/app/services/runLogs/environmentLogContext.server.ts:21-91",
-        "apps/webapp/app/presenters/v3/OrgRunLogsPresenter.server.ts:159-185",
-        "packages/core/src/v3/logger/taskLogger.ts:30-43",
-        "packages/core/src/v3/logger/taskLogger.ts:96-102",
-        "apps/webapp/test/orgRunLogs.test.ts:76-91",
-        "packages/core/test/taskLogger.env-context.test.ts:20-38"
       ]
     }
   ],

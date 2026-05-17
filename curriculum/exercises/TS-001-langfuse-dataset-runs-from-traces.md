@@ -931,7 +931,7 @@ Expected answer:
 Hints:
 
 1. Look at the ownership boundary between a dataset and the trace ids supplied by the client.
-2. Compare the new helper signature with existing trace/observation lookup helpers that require `projectId`.
+2. Compare the new helper signature with the existing project-scoped helpers: `getObservationById` in `web/src/pages/api/public/dataset-run-items.ts` and `getTraceById` in `packages/shared/src/server/repositories/traces.ts`.
 3. The dangerous query is the raw trace lookup in `getTraceCandidatesForDatasetRun`; it never mentions `projectId`.
 
 ### Flaw 2: The PR lets caller-controlled historical time become creation/ingestion time

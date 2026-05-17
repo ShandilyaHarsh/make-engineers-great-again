@@ -7862,17 +7862,9 @@
       "expectedFix": "",
       "goldenAnswer": "- `identify`: The persisted bucket key is only `(namespace, identifier, bucket_start_ms)`. The table stores `workspace_id`, `region`, `duration_ms`, and `limit_value`, but the unique index, bucket ID, read query, subject query, and test double all ignore `workspace_id`. They also ignore the full existing `counterKey` contract of `(workspaceID, namespace, identifier, durationMs, sequence)`, and the region field is stored as diagnostic text rather than being part of the persistence semantics.\n- `impact`: Two workspaces that both use namespace `tokens` and identifier `user_123` will write to the same persisted row. A restart can hydrate workspace B with workspace A's usage, causing cross-customer throttling or accidental allowance depending on which row was last written. Different duration limits for the same subject can also overwrite each other's window metadata. Cross-region behavior becomes muddled because this table now acts like a shared enforcement surface without matching the existing origin/blocklist key contract.\n- `fix_direction`: Make the persisted bucket identity match the limiter identity. At minimum use a compound key over `workspace_id`, `namespace`, `identifier`, `duration_ms`, and `sequence` or `bucket_start_ms`. If the persisted row represents local regional state before origin reconciliation, include `region` in that identity and merge deliberately during hydration. Every get/list/upsert/debug query must accept the same scoped key, and tests must assert that identical namespace and identifier values in different workspaces never collide.",
       "hints": [
-        "Compare the new unique index to counterKey in the existing limiter.",
+        "Compare the new unique index to counterKey in the existing limiter at internal/services/ratelimit/keys.go.",
         "In this codebase, Namespace is not globally unique.",
         "The test named NamespaceReuseAcrossWorkspaces is actually blessing the bug."
-      ],
-      "reviewAnchors": [
-        "pkg/mysql/schema/ratelimit_minute_buckets.sql:18-22",
-        "pkg/db/queries/ratelimit_buckets.sql:43-58",
-        "pkg/db/queries/ratelimit_buckets.sql:130-143",
-        "internal/services/ratelimit/persisted_bucket.go:50-62",
-        "internal/services/ratelimit/persisted_bucket.go:193-202",
-        "internal/services/ratelimit/persisted_bucket_test.go:147-183"
       ]
     },
     {
@@ -7887,15 +7879,7 @@
       "hints": [
         "Search the diff for time.Now() in the persistence path.",
         "The function takes requestTime, but what value does it actually truncate?",
-        "Existing origin sync asserts request time is non-zero because replay must keep the original window."
-      ],
-      "reviewAnchors": [
-        "internal/services/ratelimit/persisted_bucket.go:64-83",
-        "internal/services/ratelimit/persisted_bucket.go:105-136",
-        "internal/services/ratelimit/persisted_bucket.go:159-166",
-        "internal/services/ratelimit/ratelimit.go:227-240",
-        "internal/services/ratelimit/origin.go:69-75",
-        "internal/services/ratelimit/persisted_bucket_test.go:185-196"
+        "Existing origin sync in internal/services/ratelimit/origin.go asserts request time is non-zero because replay must keep the original window from calculateSequence(req.Time, req.Duration)."
       ]
     }
   ],

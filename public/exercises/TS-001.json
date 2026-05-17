@@ -5829,13 +5829,8 @@
       "goldenAnswer": "- Identify: `getTraceCandidatesForDatasetRun` accepts only `traceIds` and queries `FROM traces WHERE id IN (...)` without `project_id = auth.scope.projectId`. The dedupe helper also checks `dataset_run_items` by dataset/run/trace but not project. This lets an authenticated user attach trace ids from another project if they know or guess the id.\n- Impact: Cross-project trace references can be written into dataset items and dataset run item events under the attacker's project. That can leak trace names, user ids, session ids, timestamps, and can trigger downstream eval processing against data the project should not own. It also corrupts dataset/run analytics because project-owned datasets now point at foreign tracing data.\n- Fix direction: Reuse the existing project-scoped trace repository contract, or add a bulk helper that requires `projectId` and pushes `project_id = ?` into the storage query. Return missing for any trace outside the project. Also scope existing-run-item queries by `projectId` even when dataset/run ids are already expected to imply it, because this is a security boundary.",
       "hints": [
         "Look at the ownership boundary between a dataset and the trace ids supplied by the client.",
-        "Compare the new helper signature with existing trace/observation lookup helpers that require projectId.",
+        "Compare the new helper signature with the existing project-scoped helpers: getObservationById in web/src/pages/api/public/dataset-run-items.ts and getTraceById in packages/shared/src/server/repositories/traces.ts.",
         "The dangerous query is the raw trace lookup in getTraceCandidatesForDatasetRun; it never mentions projectId."
-      ],
-      "reviewAnchors": [
-        "web/src/features/public-api/server/dataset-runs-from-traces.ts:92-125",
-        "web/src/features/public-api/server/dataset-runs-from-traces.ts:127-146",
-        "web/src/features/public-api/server/dataset-runs-from-traces.ts:184-186"
       ]
     },
     {
@@ -5851,12 +5846,6 @@
         "Ask what createdAt means for a newly-created dataset run item.",
         "Follow createdAtByTraceId into resolveItemCreatedAt, then into buildRunItemEvent.",
         "The internal event timestamp is being set to a user-provided or trace-observed time instead of the time the mutation was accepted."
-      ],
-      "reviewAnchors": [
-        "web/src/features/public-api/types/dataset-runs-from-traces.ts:113-126",
-        "web/src/features/public-api/server/dataset-runs-from-traces.ts:64-84",
-        "web/src/features/public-api/server/dataset-runs-from-traces.ts:217-225",
-        "web/src/features/public-api/server/dataset-runs-from-traces.ts:264-269"
       ]
     }
   ],

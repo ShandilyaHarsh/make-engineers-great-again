@@ -54,7 +54,6 @@ export type ExerciseFlaw = {
   expectedFix: string;
   goldenAnswer: string;
   hints: string[];
-  reviewAnchors?: string[];
 };
 
 export type Exercise = {

@@ -7459,11 +7459,6 @@
         "Read the comment above the index and the actual findDueWindows filter side by side.",
         "A due-job worker usually needs the due timestamp in the leading compound index.",
         "If the query sorts by nextFlushAt, ask whether the database can satisfy that sort from the index."
-      ],
-      "reviewAnchors": [
-        "libs/dal/src/repositories/digest-window/digest-window.schema.ts:104-133",
-        "libs/dal/src/repositories/digest-window/digest-window.repository.ts:115-139",
-        "apps/worker/src/app/workflow/usecases/process-digest-windows/process-digest-windows.usecase.ts:26-67"
       ]
     },
     {
@@ -7479,12 +7474,6 @@
         "A string like 2026-03-29 02:30:00 does not say which timezone created it.",
         "Look at the real timed digest service: it uses date-fns-tz, but this new service does not.",
         "The test picks a DST date but only checks that a string was stored."
-      ],
-      "reviewAnchors": [
-        "libs/dal/src/repositories/digest-window/digest-window.entity.ts:42-48",
-        "libs/dal/src/repositories/digest-window/digest-window.schema.ts:54-67",
-        "libs/application-generic/src/services/digest-windows/digest-window.service.ts:83-158",
-        "apps/api/src/app/events/e2e/digest-windows.e2e.ts:141-169"
       ]
     }
   ],

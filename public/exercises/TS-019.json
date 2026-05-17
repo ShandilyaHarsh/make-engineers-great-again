@@ -6282,16 +6282,9 @@
       "expectedFix": "",
       "goldenAnswer": "- `identify`: The new table stores `localDate`, `startLocal`, and `endLocal` as strings, but it does not store the timezone/version that made those strings meaningful. Reads query `localDate` by formatting server-side `dateFrom`/`dateTo`, and `parseExceptionStart` parses `dayjs(exception.localDate).hour(...).tz(timeZone)` instead of constructing the selected wall-clock time in the schedule timezone. This bypasses the existing `processDateOverride`/`buildDateRanges` timezone handling and ignores travel-schedule behavior.\n- `impact`: Exceptions will shift or disappear near UTC day boundaries and DST transitions. A New York user's \"June 10 unavailable\" can be looked up as June 9 or June 11 depending on the server/input range. A travel schedule can apply the exception to the wrong timezone because the stored row has no timezone provenance. Customers will see slots on days they blocked or lose slots on days they opened.\n- `fix_direction`: Give the exception an explicit time contract. Either store canonical UTC start/end instants plus the source IANA timezone and local date used for display, or model it exactly like existing date overrides with schedule-owned timezone conversion. Query by UTC range overlap, not by server-formatted localDate strings. If travel schedules affect exceptions, document and implement that precedence with tests around DST and UTC boundary cases.",
       "hints": [
-        "Compare parseExceptionStart to the existing processDateOverride.",
+        "Compare parseExceptionStart to the existing processDateOverride in packages/features/schedules/lib/date-ranges.ts.",
         "A YYYY-MM-DD string is not enough once users and servers live in different timezones.",
         "The lookup range is formatted from server dates, not the schedule's local calendar."
-      ],
-      "reviewAnchors": [
-        "packages/prisma/schema.prisma:968-981",
-        "packages/prisma/migrations/20260516093000_add_availability_exceptions/migration.sql:14-24",
-        "packages/features/schedules/services/AvailabilityExceptionService.ts:157-182",
-        "packages/features/schedules/lib/apply-availability-exceptions.ts:33-63",
-        "packages/features/schedules/lib/apply-availability-exceptions.test.ts:36-56"
       ]
     },
     {
@@ -6307,14 +6300,6 @@
         "Defaults in migrations are product behavior, not just schema trivia.",
         "Look at what EXCEPTIONS_ONLY does when exceptions is empty.",
         "A backfill row with UNAVAILABLE is not an empty-state helper in a scheduling system."
-      ],
-      "reviewAnchors": [
-        "packages/prisma/schema.prisma:948-949",
-        "packages/prisma/migrations/20260516093000_add_availability_exceptions/migration.sql:10-12",
-        "packages/prisma/migrations/20260516093000_add_availability_exceptions/migration.sql:42-69",
-        "packages/features/availability/lib/getUserAvailability.ts:347-354",
-        "packages/features/schedules/lib/apply-availability-exceptions.ts:20-28",
-        "packages/features/schedules/lib/apply-availability-exceptions.test.ts:58-78"
       ]
     }
   ],

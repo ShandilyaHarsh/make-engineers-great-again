@@ -18685,7 +18685,7 @@
       "hints": [
         "Trace one permission rule through the old path and the new path. Are they using the same semantic representation or two different interpreters?",
         "If SQL and app-level filtering both interpret permissions, every policy feature now has to be implemented twice perfectly.",
-        "Performance optimizations for access control should usually compile the existing permission AST, not invent a second permission language."
+        "Performance optimizations for access control should usually compile the existing permission AST from api/src/permissions/modules/process-ast/process-ast.ts/getCases, not invent a second permission language in compile-permission-sql.ts."
       ]
     },
     {

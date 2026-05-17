@@ -3190,7 +3190,7 @@ index 0000000000..086bad0009
 Find every place the PR writes `reservation_item` or `inventory_level.reserved_quantity`. Is the workflow using the module API that owns those invariants?
 
 ### Hint 2
-The existing inventory service explicitly treats `reserved_quantity` as derived from reservation item operations. A workflow that writes that counter directly is taking ownership it should not have.
+The existing inventory service in `packages/modules/inventory/src/services/inventory-module.ts` explicitly treats `reserved_quantity` as derived from reservation item operations. A workflow that writes that counter directly is taking ownership it should not have.
 
 ### Hint 3
 When a workflow recreates availability checks, reservation ids, counter updates, event emission, and release behavior, it is no longer orchestration. It has become a second inventory module.

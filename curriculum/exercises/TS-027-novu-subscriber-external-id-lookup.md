@@ -1434,7 +1434,7 @@ Expected answer:
 
 Hints:
 
-1. Search for the existing unique index and existing repository lookup for subscribers.
+1. Search for the existing unique index `unique_subscriber_per_environment` in `libs/dal/src/repositories/subscriber/subscriber.schema.ts` and the repository lookup `findBySubscriberId(environmentId, subscriberId)` in `libs/dal/src/repositories/subscriber/subscriber.repository.ts`.
 2. Follow the command fields into the actual Mongo query. Passing `environmentId` through a command does not matter if the repository ignores it.
 3. The cache key repeats the same mistake as the query: it has the external ID but no environment or organization boundary.
 

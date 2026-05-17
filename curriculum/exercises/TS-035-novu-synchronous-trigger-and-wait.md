@@ -1669,7 +1669,7 @@ Expected answer:
 Hints:
 
 1. Follow the request from controller to use case and ask whether the HTTP handler is still doing API work or now doing worker work.
-2. Compare the new loop with the existing `ParseEventRequest` path that validates, builds `jobData`, and calls `workflowQueueService.add(...)`.
+2. Compare the new loop with the existing `ParseEventRequest` path in `apps/api/src/app/events/usecases/parse-event-request/parse-event-request.usecase.ts`, which validates, builds `jobData`, and calls `workflowQueueService.add(...)`.
 3. Look at the `while (Date.now() - startedAt < timeoutMs)` loop and the repeated `readJobs/readMessages` calls after the trigger has already been queued.
 
 ### Flaw 2: The Public Contract Says Delivered When Novu Has Only Queued Or Processed Work

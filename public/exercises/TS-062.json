@@ -13524,10 +13524,6 @@
         "Start with state-machine ownership. Which code path is allowed to move a terminal run back into an active status?",
         "Inspect the retry scheduler, not only the cancel endpoint. What happens if completion and cancellation race?",
         "The revealing evidence is the test matrix case that expects a run with status CANCELED to still return retried."
-      ],
-      "reviewAnchors": [
-        "apps/webapp/app/v3/services/cancelAwareRetryScheduler.server.ts:42-78",
-        "apps/webapp/app/v3/services/cancelAwareRetryScheduler.test.ts:81-94"
       ]
     },
     {
@@ -13543,10 +13539,6 @@
         "A database status is not the same thing as a distributed cancellation. Ask what process is still running after this API returns.",
         "Look for whether the new service reuses the existing coordinator cancellation contract already present in Trigger.dev.",
         "The client wrapper exists, but no path invokes requestCancellation or requestAttemptCancellation before returning success."
-      ],
-      "reviewAnchors": [
-        "apps/webapp/app/v3/services/cancelRunningTaskRun.server.ts:48-117",
-        "apps/webapp/app/v3/services/cancelRunCoordinatorClient.server.ts:14-52"
       ]
     }
   ],

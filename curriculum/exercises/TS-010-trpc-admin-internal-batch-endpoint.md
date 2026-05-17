@@ -993,7 +993,7 @@ Expected answer:
 Hints:
 
 1. Compare this link to `httpBatchLink`, which has separate loaders for query and mutation.
-2. Search the server parser for the existing mixed procedure type rejection.
+2. Search the server parser for the existing mixed procedure type rejection in `packages/server/src/unstable-core-do-not-import/http/contentType.ts`.
 3. The retry test's duplicated audit entry is not a harmless assertion. It is the production failure mode.
 
 ## Final Expert Debrief
